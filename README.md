@@ -308,7 +308,7 @@ Both integration tests activate the `test` profile via `@ActiveProfiles("test")`
 
 Tests run against an **isolated in-memory H2 database** (`jdbc:h2:mem:task_manager_test`) with `ddl-auto=create-drop`, so they never touch the development database and leave no residue behind.
 
-The suite contains 12 tests covering creation, retrieval, validation failures, malformed JSON, empty bodies, and service-layer error paths.
+The suite contains 17 tests covering creation, retrieval, validation failures, malformed JSON, empty bodies, and service-layer error paths.
 
 ## Database
 

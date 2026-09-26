@@ -2,6 +2,7 @@ package task_manager.service;
 
 
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 import task_manager.controller.model.TaskEntity;
 import task_manager.exception.InvalidTaskException;
@@ -25,6 +26,7 @@ public class TaskServiceImpl implements TaskService {
     }
 
     @Override
+    @Transactional
     public TaskEntity createNewTask(TaskEntity task) {
 
         if (task == null) {
@@ -35,6 +37,28 @@ public class TaskServiceImpl implements TaskService {
         if (taskDb == null) {
             throw new TaskPersistenceException("Task could not be created");
         }
+        return taskDb;
+    }
+
+    @Override
+    @Transactional
+    public TaskEntity updateTaskDescription(TaskEntity task) {
+
+        if (task == null) {
+            throw new InvalidTaskException("The task can not be null, enter a valid task");
+        }
+
+        if (task.getId() == null) {
+            throw new InvalidTaskException("Task id is required to update an existing task");
+        }
+
+        if (task.getDescription() == null || task.getDescription().isBlank()) {
+            throw new InvalidTaskException("description is required");
+        }
+
+        TaskEntity taskDb = getTaskById(task.getId());
+        taskDb.setDescription(task.getDescription());
+
         return taskDb;
     }
 
