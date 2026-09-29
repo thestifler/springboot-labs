@@ -330,7 +330,7 @@ src/main/java/library_api/
 │   └── UserStatus.java                 # Enum de estados
 ├── exception/
 │   ├── ApiError.java                   # Cuerpo uniforme de error
-│   ├── BookAlreadyExistsException.java  # ISBN duplicado → 409
+│   ├── BookAlreadyExistsException.java # ISBN duplicado → 409
 │   ├── BookNotFoundException.java      # ISBN inexistente → 404
 │   ├── GlobalExceptionHandler.java     # Excepciones → respuestas HTTP
 │   ├── NoAvailableCopiesException.java # Sin ejemplares → 409
@@ -384,8 +384,19 @@ lugar de devolver `null`. `GlobalExceptionHandler` la traduce a **404**, junto
 con el resto de errores de validación (400) y una red de seguridad para
 excepciones inesperadas que no filtra detalles internos al cliente.
 
-Los libros siguen el mismo patrón: `BookNotFoundException` → **404** y
-`BookAlreadyExistsException` → **409**.
+Los libros siguen el mismo patrón: `BookNotFoundException` → **404**,
+`BookAlreadyExistsException` → **409** y `NoAvailableCopiesException` → **409**.
+
+Los dos 409 son casos distintos y conviene no confundirlos. El duplicado es un
+conflicto de identidad: el isbn ya está dado de alta. El de ejemplares es un
+conflicto de estado: el isbn es válido y el libro existe, pero no queda ninguno
+libre. Por eso el agotamiento **no** es un 404, que sugeriría que el recurso no
+existe.
+
+Esta distinción es justamente lo que se perdió cuando `reserveCopy` devolvía un
+`boolean`: `false` servía tanto para «no existe» como para «agotado», y el
+llamante no tenía forma de saber cuál de los dos había ocurrido salvo por
+mirar antes el propio recurso.
 
 ### El ISBN es un `String`, no un `long`
 
@@ -542,6 +553,17 @@ recompila: `./mvnw clean test`.
 **`Cannot invoke "jdk.internal.platform.CgroupInfo.getMountPoint()"`**
 
 Estás con JDK 17.0.2. Cambia a 17.0.10+ (ver [requisitos](#requisitos)).
+
+**`POST /library/books` responde 400 con `el availableCopyNumber es obligatorio`
+pero el JSON sí traía un número de ejemplares**
+
+El campo se renombró de `avaliableCopyNumber` (errata) a `availableCopyNumber`,
+y el nombre importa: el JSON es el contrato. Un cliente que aún mande el nombre
+antiguo no falla con un «campo desconocido», sino con un `null` silencioso que
+la validación reporta como ausente. Si ves este error y estás seguro de haberlo
+enviado, casi siempre es que usas el nombre viejo. En la respuesta, `fieldErrors`
+solo nombra los campos que Spring sí vio: si el tuyo no aparece ahí, es que
+viaja con otro nombre.
 
 **`POST /library/books` responde 500 y el body es `Cannot map null into type long`**
 
