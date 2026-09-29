@@ -56,7 +56,7 @@ class BookControllerTest {
                 .andExpect(jsonPath("$.author").value("Ursula K. Le Guin"))
                 .andExpect(jsonPath("$.title").value("The Left Hand of Darkness"))
                 .andExpect(jsonPath("$.publicationDate").value("1997-03-03"))
-                .andExpect(jsonPath("$.avaliableCopyNumber").value(4));
+                .andExpect(jsonPath("$.availableCopyNumber").value(4));
     }
 
     @Test
@@ -96,7 +96,7 @@ class BookControllerTest {
                                   "author": "Robert C. Martin",
                                   "title": "Clean Code",
                                   "publicationDate": "2008-08-01",
-                                  "avaliableCopyNumber": 7
+                                  "availableCopyNumber": 7
                                 }
                                 """))
                 .andExpect(status().isCreated())
@@ -104,7 +104,7 @@ class BookControllerTest {
                 .andExpect(jsonPath("$.isbn").value(ISBN))
                 .andExpect(jsonPath("$.title").value("Clean Code"))
                 .andExpect(jsonPath("$.publicationDate").value("2008-08-01"))
-                .andExpect(jsonPath("$.avaliableCopyNumber").value(7));
+                .andExpect(jsonPath("$.availableCopyNumber").value(7));
     }
 
     @Test
@@ -136,7 +136,7 @@ class BookControllerTest {
                                   "isbn": "  ",
                                   "author": "",
                                   "title": "   ",
-                                  "avaliableCopyNumber": -1
+                                  "availableCopyNumber": -1
                                 }
                                 """))
                 .andExpect(status().isBadRequest())
@@ -144,7 +144,7 @@ class BookControllerTest {
                 .andExpect(jsonPath("$.fieldErrors.isbn").exists())
                 .andExpect(jsonPath("$.fieldErrors.author").exists())
                 .andExpect(jsonPath("$.fieldErrors.title").exists())
-                .andExpect(jsonPath("$.fieldErrors.avaliableCopyNumber").exists());
+                .andExpect(jsonPath("$.fieldErrors.availableCopyNumber").exists());
 
         verifyNoInteractions(bookService);
     }
@@ -169,7 +169,7 @@ class BookControllerTest {
     }
 
     @Test
-    @DisplayName("POST sin avaliableCopyNumber responde 400 y no un 500 de deserializacion")
+    @DisplayName("POST sin availableCopyNumber responde 400 y no un 500 de deserializacion")
     void addBook_sinNumeroDeCopias_devuelve400() throws Exception {
         // Regresion: con un long primitivo en el DTO, Jackson lanzaba
         // MismatchedInputException al deserializar y la peticion terminaba en un
@@ -184,7 +184,7 @@ class BookControllerTest {
                                 }
                                 """))
                 .andExpect(status().isBadRequest())
-                .andExpect(jsonPath("$.fieldErrors.avaliableCopyNumber").exists());
+                .andExpect(jsonPath("$.fieldErrors.availableCopyNumber").exists());
 
         verifyNoInteractions(bookService);
     }
@@ -201,7 +201,7 @@ class BookControllerTest {
                                   "isbn": "9780132350884",
                                   "author": "Robert C. Martin",
                                   "title": "Clean Code",
-                                  "avaliableCopyNumber": 7
+                                  "availableCopyNumber": 7
                                 }
                                 """))
                 .andExpect(status().isConflict())

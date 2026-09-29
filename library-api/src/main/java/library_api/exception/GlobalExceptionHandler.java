@@ -51,6 +51,17 @@ public class GlobalExceptionHandler {
                 .body(ApiError.of(HttpStatus.CONFLICT.value(), "Conflict", ex.getMessage()));
     }
 
+    /**
+     * El libro existe pero no quedan ejemplares. 409 y no 404 porque la peticion
+     * es valida: choca con el estado actual del recurso.
+     */
+    @ExceptionHandler(NoAvailableCopiesException.class)
+    public ResponseEntity<ApiError> handleNoAvailableCopies(NoAvailableCopiesException ex) {
+        log.warn("Sin ejemplares disponibles: {}", ex.getMessage());
+        return ResponseEntity.status(HttpStatus.CONFLICT)
+                .body(ApiError.of(HttpStatus.CONFLICT.value(), "Conflict", ex.getMessage()));
+    }
+
     /** Fallo de validacion del cuerpo de la peticion (@Valid @RequestBody). */
     @ExceptionHandler(MethodArgumentNotValidException.class)
     public ResponseEntity<ApiError> handleInvalidBody(MethodArgumentNotValidException ex) {

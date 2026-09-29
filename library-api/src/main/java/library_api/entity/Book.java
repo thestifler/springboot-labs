@@ -41,19 +41,19 @@ public class Book {
     @Column(name = "publication_date")
     private LocalDate publicationDate;
 
-    @Column(name = "avaliable_copy_number", nullable = false)
-    private long avaliableCopyNumber;
+    @Column(name = "available_copy_number", nullable = false)
+    private long availableCopyNumber;
 
     protected Book() {
         // constructor para JPA
     }
 
-    public Book(String isbn, String author, String title, LocalDate publicationDate, long avaliableCopyNumber) {
+    public Book(String isbn, String author, String title, LocalDate publicationDate, long availableCopyNumber) {
         this.isbn = isbn;
         this.author = author;
         this.title = title;
         this.publicationDate = publicationDate;
-        this.avaliableCopyNumber = avaliableCopyNumber;
+        this.availableCopyNumber = availableCopyNumber;
     }
 
     public String getIsbn() {
@@ -88,12 +88,12 @@ public class Book {
         this.publicationDate = publicationDate;
     }
 
-    public long getAvaliableCopyNumber() {
-        return avaliableCopyNumber;
+    public long getAvailableCopyNumber() {
+        return availableCopyNumber;
     }
 
-    public void setAvaliableCopyNumber(long avaliableCopyNumber) {
-        this.avaliableCopyNumber = avaliableCopyNumber;
+    public void setAvailableCopyNumber(long availableCopyNumber) {
+        this.availableCopyNumber = availableCopyNumber;
     }
 
     /**
@@ -128,7 +128,7 @@ public class Book {
                 + ", author='" + author + '\''
                 + ", title='" + title + '\''
                 + ", publicationDate=" + publicationDate
-                + ", avaliableCopyNumber=" + avaliableCopyNumber
+                + ", availableCopyNumber=" + availableCopyNumber
                 + '}';
     }
 }

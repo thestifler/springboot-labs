@@ -2,6 +2,7 @@ package library_api.controller;
 
 import library_api.entity.Book;
 import library_api.exception.BookNotFoundException;
+import library_api.exception.NoAvailableCopiesException;
 import library_api.repository.BookRepository;
 import library_api.service.BookService;
 
@@ -70,14 +71,14 @@ class BookControllerIntegrationTest {
                                   "author": "Ursula K. Le Guin",
                                   "title": "The Left Hand of Darkness",
                                   "publicationDate": "1997-03-03",
-                                  "avaliableCopyNumber": 4
+                                  "availableCopyNumber": 4
                                 }
                                 """))
                 .andExpect(status().isCreated())
                 .andExpect(header().string("Location", "/library/books/9780306406157"))
                 .andExpect(jsonPath("$.isbn").value(ISBN))
                 .andExpect(jsonPath("$.publicationDate").value("1997-03-03"))
-                .andExpect(jsonPath("$.avaliableCopyNumber").value(4));
+                .andExpect(jsonPath("$.availableCopyNumber").value(4));
 
         // El isbn es la clave primaria: debe haberse guardado como tal.
         assertThat(bookRepository.findById(ISBN)).isPresent();
@@ -88,7 +89,7 @@ class BookControllerIntegrationTest {
                 .andExpect(jsonPath("$.author").value("Ursula K. Le Guin"))
                 .andExpect(jsonPath("$.title").value("The Left Hand of Darkness"))
                 .andExpect(jsonPath("$.publicationDate").value("1997-03-03"))
-                .andExpect(jsonPath("$.avaliableCopyNumber").value(4));
+                .andExpect(jsonPath("$.availableCopyNumber").value(4));
     }
 
     @Test
@@ -100,7 +101,7 @@ class BookControllerIntegrationTest {
         mockMvc.perform(get("/library/books/{isbn}", "9788491050469"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.isbn").value("9788491050469"))
-                .andExpect(jsonPath("$.avaliableCopyNumber").value(2));
+                .andExpect(jsonPath("$.availableCopyNumber").value(2));
     }
 
     @Test
@@ -115,7 +116,7 @@ class BookControllerIntegrationTest {
                                   "isbn": "9780306406157",
                                   "author": "Otro autor",
                                   "title": "Otro titulo",
-                                  "avaliableCopyNumber": 9
+                                  "availableCopyNumber": 9
                                 }
                                 """))
                 .andExpect(status().isConflict())
@@ -136,84 +137,100 @@ class BookControllerIntegrationTest {
                 .andExpect(jsonPath("$.message").value("No existe un libro con isbn: 9788491050469"));
     }
 
+    // ---------------------------------------------------------------------
+    // reserveCopy
+    // ---------------------------------------------------------------------
+
     @Test
-    @DisplayName("El descuento de ejemplares se persiste de verdad en la base de datos")
-    void decreaseAvalaibleCopyNumberBook_persisteElNuevoContador() {
+    @DisplayName("La reserva de ejemplares se persiste de verdad en la base de datos")
+    void reserveCopy_persisteElNuevoContador() {
         bookRepository.saveAndFlush(new Book(ISBN, "Autor", "Titulo", LocalDate.of(2000, 1, 1), 2));
 
-        assertThat(bookService.decreaseAvalaibleCopyNumberBook(ISBN)).isTrue();
+        bookService.reserveCopy(ISBN);
+
         // flush y clear obligan a releer de la base de datos: si el contador no se
         // hubiera escrito, aqui seguiria viendo 2.
         entityManager.flush();
         entityManager.clear();
 
-        assertThat(bookRepository.findById(ISBN).orElseThrow().getAvaliableCopyNumber()).isEqualTo(1);
+        assertThat(bookRepository.findById(ISBN).orElseThrow().getAvailableCopyNumber()).isEqualTo(1);
     }
 
     @Test
-    @DisplayName("Un libro agotado devuelve false y conserva el contador en cero")
-    void decreaseAvalaibleCopyNumberBook_sinEjemplares_devuelveFalse() {
+    @DisplayName("Un libro agotado lanza NoAvailableCopiesException y conserva el contador en cero")
+    void reserveCopy_sinEjemplares_lanzaNoAvailableCopiesException() {
         bookRepository.saveAndFlush(new Book(ISBN, "Autor", "Titulo", LocalDate.of(2000, 1, 1), 0));
 
-        assertThat(bookService.decreaseAvalaibleCopyNumberBook(ISBN)).isFalse();
+        assertThatThrownBy(() -> bookService.reserveCopy(ISBN))
+                .isInstanceOf(NoAvailableCopiesException.class)
+                .hasMessageContaining(ISBN);
 
         entityManager.flush();
         entityManager.clear();
 
-        assertThat(bookRepository.findById(ISBN).orElseThrow().getAvaliableCopyNumber()).isZero();
+        assertThat(bookRepository.findById(ISBN).orElseThrow().getAvailableCopyNumber()).isZero();
+    }
+
+    @Test
+    @DisplayName("Reservar un isbn inexistente propaga BookNotFoundException, no NoAvailableCopies")
+    void reserveCopy_cuandoNoExiste_lanzaBookNotFoundException() {
+        assertThatThrownBy(() -> bookService.reserveCopy("9788491050469"))
+                .isInstanceOf(BookNotFoundException.class)
+                .isNotInstanceOf(NoAvailableCopiesException.class)
+                .hasMessageContaining("9788491050469");
     }
 
     // ---------------------------------------------------------------------
-    // increaseAvaliableCopyNumberBook
+    // releaseCopy
     // ---------------------------------------------------------------------
 
     @Test
-    @DisplayName("El incremento de ejemplares se persiste de verdad en la base de datos")
-    void increaseAvaliableCopyNumberBook_persisteElNuevoContador() {
+    @DisplayName("La devolucion de ejemplares se persiste de verdad en la base de datos")
+    void releaseCopy_persisteElNuevoContador() {
         bookRepository.saveAndFlush(new Book(ISBN, "Autor", "Titulo", LocalDate.of(2000, 1, 1), 1));
 
-        bookService.increaseAvaliableCopyNumberBook(ISBN);
+        bookService.releaseCopy(ISBN);
 
         // Sin el clear(), findById devolveria la entidad cacheada con el valor
         // viejo y el test pasaria aunque el UPDATE no se hubiera aplicado.
         entityManager.flush();
         entityManager.clear();
 
-        assertThat(bookRepository.findById(ISBN).orElseThrow().getAvaliableCopyNumber()).isEqualTo(2);
+        assertThat(bookRepository.findById(ISBN).orElseThrow().getAvailableCopyNumber()).isEqualTo(2);
     }
 
     @Test
-    @DisplayName("Incrementar desde cero funciona: un alta recien creada puede empezar a 0")
-    void increaseAvaliableCopyNumberBook_desdeCero() {
+    @DisplayName("Devolver desde cero funciona: el contador llega a 1")
+    void releaseCopy_desdeCero() {
         bookRepository.saveAndFlush(new Book(ISBN, "Autor", "Titulo", LocalDate.of(2000, 1, 1), 0));
 
-        bookService.increaseAvaliableCopyNumberBook(ISBN);
+        bookService.releaseCopy(ISBN);
 
         entityManager.flush();
         entityManager.clear();
 
-        assertThat(bookRepository.findById(ISBN).orElseThrow().getAvaliableCopyNumber()).isEqualTo(1);
+        assertThat(bookRepository.findById(ISBN).orElseThrow().getAvailableCopyNumber()).isEqualTo(1);
     }
 
     @Test
     @DisplayName("Varias devoluciones consecutivas suman de una en una")
-    void increaseAvaliableCopyNumberBook_variasVeces() {
+    void releaseCopy_variasVeces() {
         bookRepository.saveAndFlush(new Book(ISBN, "Autor", "Titulo", LocalDate.of(2000, 1, 1), 5));
 
         for (int i = 0; i < 3; i++) {
-            bookService.increaseAvaliableCopyNumberBook(ISBN);
+            bookService.releaseCopy(ISBN);
         }
 
         entityManager.flush();
         entityManager.clear();
 
-        assertThat(bookRepository.findById(ISBN).orElseThrow().getAvaliableCopyNumber()).isEqualTo(8);
+        assertThat(bookRepository.findById(ISBN).orElseThrow().getAvailableCopyNumber()).isEqualTo(8);
     }
 
     @Test
-    @DisplayName("Incrementar un isbn inexistente lanza BookNotFoundException y no crea nada")
-    void increaseAvaliableCopyNumberBook_cuandoNoExiste_lanzaBookNotFoundException() {
-        assertThatThrownBy(() -> bookService.increaseAvaliableCopyNumberBook("9788491050469"))
+    @DisplayName("Devolver un isbn inexistente lanza BookNotFoundException y no crea nada")
+    void releaseCopy_cuandoNoExiste_lanzaBookNotFoundException() {
+        assertThatThrownBy(() -> bookService.releaseCopy("9788491050469"))
                 .isInstanceOf(BookNotFoundException.class)
                 .hasMessageContaining("9788491050469");
 
@@ -223,24 +240,16 @@ class BookControllerIntegrationTest {
 
     @Test
     @DisplayName("Reservar y devolver en alternancia deja el contador donde estaba")
-    void increaseYDecrease_enAlternancia_dejanElContadorIgual() {
+    void reserveYRelease_enAlternancia_dejanElContadorIgual() {
         bookRepository.saveAndFlush(new Book(ISBN, "Autor", "Titulo", LocalDate.of(2000, 1, 1), 3));
 
-        bookService.increaseAvaliableCopyNumberBook(ISBN); // 3 -> 4
-        bookService.decreaseAvalaibleCopyNumberBook(ISBN);  // 4 -> 3
+        bookService.releaseCopy(ISBN); // 3 -> 4
+        bookService.reserveCopy(ISBN);  // 4 -> 3
 
         entityManager.flush();
         entityManager.clear();
 
-        assertThat(bookRepository.findById(ISBN).orElseThrow().getAvaliableCopyNumber()).isEqualTo(3);
-    }
-
-    @Test
-    @DisplayName("Reservar un isbn inexistente propaga BookNotFoundException")
-    void decreaseAvalaibleCopyNumberBook_cuandoNoExiste_lanzaBookNotFoundException() {
-        assertThatThrownBy(() -> bookService.decreaseAvalaibleCopyNumberBook("9788491050469"))
-                .isInstanceOf(BookNotFoundException.class)
-                .hasMessageContaining("9788491050469");
+        assertThat(bookRepository.findById(ISBN).orElseThrow().getAvailableCopyNumber()).isEqualTo(3);
     }
 
     @Test

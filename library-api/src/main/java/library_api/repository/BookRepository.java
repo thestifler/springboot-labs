@@ -38,12 +38,12 @@ public interface BookRepository extends JpaRepository<Book,String> {
      * Devolver un ejemplar no exige ninguna decision de negocio (a diferencia de
      * reservarlo, que debe comprobar si queda alguno), asi que no hace falta leer
      * el valor antes: sumar sobre el valor guardado en la base de datos es atomico
-     * por construccion. Por eso NO se usa el findByIsbnForUpdate del descuento:
+     * por construccion. Por eso NO se usa el findByIsbnForUpdate de la reserva:
      * aqui un UPDATE basta y es mas eficiente.
      *
      * @return filas afectadas: 1 si el libro existe, 0 si no existe
      */
     @Modifying(clearAutomatically = true, flushAutomatically = true)
-    @Query("update Book b set b.avaliableCopyNumber = b.avaliableCopyNumber + 1 where b.isbn = :isbn")
-    int increaseAvaliableCopyNumber(@Param("isbn") String isbn);
+    @Query("update Book b set b.availableCopyNumber = b.availableCopyNumber + 1 where b.isbn = :isbn")
+    int increaseAvailableCopyNumber(@Param("isbn") String isbn);
 }

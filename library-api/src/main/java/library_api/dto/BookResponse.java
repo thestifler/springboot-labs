@@ -13,6 +13,6 @@ public record BookResponse(
         String author,
         String title,
         LocalDate publicationDate,
-        long avaliableCopyNumber
+        long availableCopyNumber
 ) {
 }

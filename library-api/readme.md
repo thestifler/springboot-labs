@@ -187,7 +187,7 @@ dígito de control correcto); `9780306406157` sirve de ejemplo.
 ```bash
 curl -i -X POST http://localhost:8080/library/books \
   -H 'Content-Type: application/json' \
-  -d '{"isbn":"9780306406157","author":"Ursula K. Le Guin","title":"The Left Hand of Darkness","publicationDate":"1997-03-03","avaliableCopyNumber":4}'
+  -d '{"isbn":"9780306406157","author":"Ursula K. Le Guin","title":"The Left Hand of Darkness","publicationDate":"1997-03-03","availableCopyNumber":4}'
 
 curl -i http://localhost:8080/library/books/9780306406157
 ```
@@ -206,7 +206,7 @@ curl -i http://localhost:8080/library/books/9780306406157
   "author": "Ursula K. Le Guin",
   "title": "The Left Hand of Darkness",
   "publicationDate": "1997-03-03",
-  "avaliableCopyNumber": 4
+  "availableCopyNumber": 4
 }
 ```
 
@@ -231,7 +231,7 @@ que responder 400 es más útil que un 404 para una consulta imposible.
 ```bash
 curl -i -X POST http://localhost:8080/library/books \
   -H 'Content-Type: application/json' \
-  -d '{"isbn":"9780306406157","author":"Ursula K. Le Guin","title":"The Left Hand of Darkness","publicationDate":"1997-03-03","avaliableCopyNumber":4}'
+  -d '{"isbn":"9780306406157","author":"Ursula K. Le Guin","title":"The Left Hand of Darkness","publicationDate":"1997-03-03","availableCopyNumber":4}'
 ```
 
 **201 Created** (con cabecera `Location`)
@@ -240,7 +240,7 @@ curl -i -X POST http://localhost:8080/library/books \
 HTTP/1.1 201
 Location: /library/books/9780306406157
 
-{"isbn":"9780306406157","author":"Ursula K. Le Guin","title":"The Left Hand of Darkness","publicationDate":"1997-03-03","avaliableCopyNumber":4}
+{"isbn":"9780306406157","author":"Ursula K. Le Guin","title":"The Left Hand of Darkness","publicationDate":"1997-03-03","availableCopyNumber":4}
 ```
 
 **409 Conflict** — el ISBN ya está dado de alta
@@ -275,7 +275,38 @@ Location: /library/books/9780306406157
 | `author` | `String` | Sí | Máx. 100 caracteres |
 | `title` | `String` | Sí | Máx. 100 caracteres |
 | `publicationDate` | `LocalDate` | No | ISO-8601. No puede ser futura |
-| `avaliableCopyNumber` | `Long` | Sí | `>= 0` |
+| `availableCopyNumber` | `Long` | Sí | `>= 0` |
+
+### Gestión de ejemplares (sin endpoint)
+
+`BookService` expone dos operaciones para mover ejemplares. **No tienen endpoint
+HTTP**: son casos de uso del dominio pendientes de exponer, y se prueban
+directamente contra el service.
+
+```java
+void reserveCopy(String isbn);   // reserva un ejemplar
+void releaseCopy(String isbn);   // devuelve un ejemplar
+```
+
+| Operación | Libro inexistente | Sin ejemplares | Éxito |
+|---|---|---|---|
+| `reserveCopy` | `BookNotFoundException` (404) | `NoAvailableCopiesException` (409) | — |
+| `releaseCopy` | `BookNotFoundException` (404) | — | — |
+
+`reserveCopy` no devuelve nada y no puede quedarse en negativo: o reserva, o
+lanza. Antes devolvía un `boolean` cuyo `false` no distinguía entre «agotado» y
+cualquier otro resultado negativo.
+
+Las dos operaciones usan estrategias distintas, a propósito:
+
+- **`reserveCopy`** lee con `findByIsbnForUpdate`, que aplica
+  `@Lock(PESSIMISTIC_WRITE)`. Necesita el valor porque tiene que **decidir**
+  si hay ejemplares. Sin el bloqueo, dos reservas concurrentes del último
+  ejemplar lo consumen ambas (lost update).
+- **`releaseCopy`** no lee nada: un único `UPDATE ... SET available_copy_number
+  = available_copy_number + 1` es atómico por construcción, y el número de
+  filas afectadas resuelve de paso si el libro existe. Por eso este no
+  necesita bloqueo y hace un solo viaje a la base de datos.
 
 ---
 
@@ -302,6 +333,7 @@ src/main/java/library_api/
 │   ├── BookAlreadyExistsException.java  # ISBN duplicado → 409
 │   ├── BookNotFoundException.java      # ISBN inexistente → 404
 │   ├── GlobalExceptionHandler.java     # Excepciones → respuestas HTTP
+│   ├── NoAvailableCopiesException.java # Sin ejemplares → 409
 │   └── UserNotFoundException.java      # Excepción de dominio
 ├── repository/
 │   ├── BookRepository.java             # JpaRepository<Book, String>
@@ -374,7 +406,7 @@ datos sigue siendo la garantía final de unicidad.
 
 ### `Long` en el DTO, `long` en la entidad
 
-`BookRequest.avaliableCopyNumber` es un `Long` (wrapper) y no un `long`
+`BookRequest.availableCopyNumber` es un `Long` (wrapper) y no un `long`
 primitivo, aunque la entidad lo declare primitivo. Motivo: Jackson falla con un
 **500** (`Cannot map null into type long`) cuando un primitivo no aparece en el
 JSON, y ese error ocurre al deserializar, **antes** de que Bean Validation pueda
@@ -439,13 +471,14 @@ correcto es `validate` y correr migraciones con Flyway o Liquibase.
 ./mvnw test
 ```
 
-32 tests repartidos en seis clases:
+63 tests repartidos en siete clases:
 
 | Clase | Tipo | Qué cubre |
 |---|---|---|
-| `BookServiceImplTest` | Unitario (Mockito) | Libro encontrado, no encontrado (**404**), persistencia, no pérdida de campos, ISBN duplicado (**409**) sin escribir |
+| `BookServiceImplTest` | Unitario (Mockito) | Libro encontrado, no encontrado (**404**), persistencia, ISBN duplicado (**409**), reserva (incluido el agotado), devolución y alternancia de ambas |
 | `BookControllerTest` | Slice web (`@WebMvcTest`) | 200, 404, **409**, 400 con errores por campo, 400 por formato de ISBN, 400 por fecha futura, cabecera `Location` |
-| `BookControllerIntegrationTest` | Integración (`@SpringBootTest`) | Recorrido completo controller → service → mapper → repository → H2: alta y posterior lectura, ISBN como clave primaria, 409 sin duplicar fila |
+| `BookControllerIntegrationTest` | Integración (`@SpringBootTest`) | Recorrido completo controller → service → mapper → repository → H2: alta y lectura, ISBN como clave primaria, 409 sin duplicar, reserva y devolución persistidas de verdad |
+| `GlobalExceptionHandlerTest` | Unitario | Que cada excepción se traduzca a su código: 404 de recurso ausente, 409 por duplicado, 409 por falta de ejemplares, 400 de validación con errores por campo, y que una excepción inesperada no filtre su mensaje al cliente |
 | `UserServiceImplTest` | Unitario (Mockito) | Usuario encontrado, no encontrado, persistencia, no pérdida de campos, `status` por defecto |
 | `UserControllerTest` | Slice web (`@WebMvcTest`) | 200, **404** en recurso inexistente, 400 con errores por campo, 400 por id no positivo, cabecera `Location`, id del cliente descartado |
 | `LibraryApiApplicationTests` | Contexto | Carga completa de la aplicación |
@@ -514,7 +547,7 @@ Estás con JDK 17.0.2. Cambia a 17.0.10+ (ver [requisitos](#requisitos)).
 
 El DTO declara un primitivo (`long`) en un campo que el cliente puede omitir.
 Jackson falla al deserializar, antes de la validación. Usa el wrapper `Long`
-con `@NotNull` en el DTO; es justo lo que hace `BookRequest.avaliableCopyNumber`
+con `@NotNull` en el DTO; es justo lo que hace `BookRequest.availableCopyNumber`
 (ver [decisiones de diseño](#long-en-el-dto-long-en-la-entidad)).
 
 **`POST /library/books` responde 400 con `el ISBN-13 introducido no es valido`**

@@ -10,6 +10,7 @@ import library_api.dto.BookResponse;
 import library_api.entity.Book;
 import library_api.exception.BookAlreadyExistsException;
 import library_api.exception.BookNotFoundException;
+import library_api.exception.NoAvailableCopiesException;
 import library_api.repository.BookRepository;
 import library_api.util.mapper.BookMapper;
 
@@ -71,7 +72,7 @@ public class BookServiceImpl implements BookService {
 
     @Override
     @Transactional
-    public boolean decreaseAvalaibleCopyNumberBook(String isbn) {
+    public void reserveCopy(String isbn) {
         log.debug("Reservando un ejemplar del libro con isbn={}", isbn);
 
         // findByIsbnForUpdate bloquea la fila hasta el commit, de modo que el
@@ -84,41 +85,40 @@ public class BookServiceImpl implements BookService {
                     return new BookNotFoundException(isbn);
                 });
 
-        long availableCopies = book.getAvaliableCopyNumber();
+        long availableCopies = book.getAvailableCopyNumber();
         if (availableCopies < 1) {
-            // El libro existe pero esta agotado: no es un error, es un resultado
-            // de negocio valido, asi que se informa con false en vez de lanzar.
+            // El libro existe pero esta agotado. No es un 404, asi que se
+            // distingue con su propia excepcion en vez de un false que el
+            // llamante tendria que interpretar.
             log.warn("No hay ejemplares disponibles del libro con isbn={}", isbn);
-            return false;
+            throw new NoAvailableCopiesException(isbn);
         }
 
-        // Post-decremento en la asignacion: numberAvaliable-- entregaria a
-        // setAvaliableCopyNumber() el valor ANTERIOR y solo decrementaria la
+        // Post-decremento en la asignacion: availableCopies-- entregaria a
+        // setAvailableCopyNumber() el valor ANTERIOR y solo decrementaria la
         // variable local, con lo que el contador nunca bajaria.
-        book.setAvaliableCopyNumber(availableCopies - 1);
+        book.setAvailableCopyNumber(availableCopies - 1);
 
         // No hace falta save(): dentro de la transaccion la entidad esta
         // gestionada y Hibernate la sincroniza sola por dirty checking al
         // commitear. Un save() explicito de una entidad ya gestionada seria un
         // no-op.
-        log.info("Ejemplar reservado del libro con isbn={}, quedan={}", isbn, book.getAvaliableCopyNumber());
-
-        return true;
+        log.info("Ejemplar reservado del libro con isbn={}, quedan={}", isbn, book.getAvailableCopyNumber());
     }
 
     @Override
     @Transactional
-    public void increaseAvaliableCopyNumberBook(String isbn) {
+    public void releaseCopy(String isbn) {
         log.debug("Devolviendo un ejemplar del libro con isbn={}", isbn);
 
         // Devolver un ejemplar no requiere leer el valor previo: sumar sobre el
         // dato almacenado es atomico en un unico UPDATE, sin necesidad de leer y
-        // luego escribir. Por eso no se bloquea la fila como en el descuento.
+        // luego escribir. Por eso no se bloquea la fila como en la reserva.
         //
         // El numero de filas afectadas resuelve ademas la existencia del libro
         // en la misma consulta: 0 filas significa que no hay ningun libro con
         // ese isbn.
-        int updatedRows = bookRepository.increaseAvaliableCopyNumber(isbn);
+        int updatedRows = bookRepository.increaseAvailableCopyNumber(isbn);
 
         if (updatedRows == 0) {
             log.warn("No existe libro con isbn={}", isbn);

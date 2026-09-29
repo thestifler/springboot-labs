@@ -46,8 +46,8 @@ public record BookRequest(
          * contrato que el cliente espera. La entidad si lo declara como long
          * primitivo: ahi el valor siempre llega ya validado.
          */
-        @NotNull(message = "el avaliableCopyNumber es obligatorio")
-        @PositiveOrZero(message = "el avaliableCopyNumber no puede ser negativo")
-        Long avaliableCopyNumber
+        @NotNull(message = "el availableCopyNumber es obligatorio")
+        @PositiveOrZero(message = "el availableCopyNumber no puede ser negativo")
+        Long availableCopyNumber
 ) {
 }
