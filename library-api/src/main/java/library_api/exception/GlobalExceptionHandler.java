@@ -36,6 +36,21 @@ public class GlobalExceptionHandler {
                 .body(ApiError.of(HttpStatus.NOT_FOUND.value(), "Not Found", ex.getMessage()));
     }
 
+    @ExceptionHandler(BookNotFoundException.class)
+    public ResponseEntity<ApiError> handleBookNotFound(BookNotFoundException ex) {
+        log.warn("Recurso no encontrado: {}", ex.getMessage());
+        return ResponseEntity.status(HttpStatus.NOT_FOUND)
+                .body(ApiError.of(HttpStatus.NOT_FOUND.value(), "Not Found", ex.getMessage()));
+    }
+
+    /** El isbn ya esta dado de alta: conflicto con el estado actual del recurso. */
+    @ExceptionHandler(BookAlreadyExistsException.class)
+    public ResponseEntity<ApiError> handleBookAlreadyExists(BookAlreadyExistsException ex) {
+        log.warn("Conflicto de recurso existente: {}", ex.getMessage());
+        return ResponseEntity.status(HttpStatus.CONFLICT)
+                .body(ApiError.of(HttpStatus.CONFLICT.value(), "Conflict", ex.getMessage()));
+    }
+
     /** Fallo de validacion del cuerpo de la peticion (@Valid @RequestBody). */
     @ExceptionHandler(MethodArgumentNotValidException.class)
     public ResponseEntity<ApiError> handleInvalidBody(MethodArgumentNotValidException ex) {

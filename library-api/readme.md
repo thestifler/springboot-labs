@@ -1,9 +1,10 @@
 # Library API
 
-API REST de usuarios para una biblioteca, construida con Spring Boot.
+API REST de usuarios y libros para una biblioteca, construida con Spring Boot.
 
-Gestiona usuarios mediante un recurso `/library/users`: consulta por id y alta.
-Los datos se persisten con JPA/Hibernate sobre H2 en memoria.
+Gestiona dos recursos: usuarios (`/library/users`, consulta por id y alta) y
+libros (`/library/books`, consulta por ISBN-13 y alta). Los datos se persisten
+con JPA/Hibernate sobre H2 en memoria.
 
 ---
 
@@ -67,9 +68,27 @@ Password: (vacío)
 
 ## API
 
+Base: `http://localhost:8080`
+
+### Endpoints
+
+| Método | Ruta | Descripción | Respuestas |
+|---|---|---|---|
+| `GET` | `/library` | Comprobación de vida | 200 `"ok"` |
+| `GET` | `/library/users/{id}` | Obtener un usuario por id | 200, 400, 404 |
+| `POST` | `/library/users` | Crear un usuario | 201, 400 |
+| `GET` | `/library/books/{isbn}` | Obtener un libro por ISBN-13 | 200, 400, 404 |
+| `POST` | `/library/books` | Dar de alta un libro | 201, 400, 409 |
+
+Todos los errores comparten el mismo cuerpo (`ApiError`): `timestamp`, `status`,
+`error`, `message` y `fieldErrors` con el detalle campo a campo en los 400 de
+validación.
+
+### Usuarios
+
 Base: `http://localhost:8080/library/users`
 
-### `GET /library/users/{id}` — Obtener un usuario
+#### `GET /library/users/{id}` — Obtener un usuario
 
 ```bash
 curl -i http://localhost:8080/library/users/1
@@ -103,7 +122,7 @@ curl -i http://localhost:8080/library/users/1
 
 ---
 
-### `POST /library/users` — Crear un usuario
+#### `POST /library/users` — Crear un usuario
 
 ```bash
 curl -i -X POST http://localhost:8080/library/users \
@@ -153,6 +172,113 @@ Location: /library/users/1
 
 ---
 
+## Libros
+
+Base: `http://localhost:8080/library/books`
+
+La clave del recurso es el **ISBN-13**, un `String` que aporta el cliente. A
+diferencia de `User`, el id **no** lo genera la base de datos: el ISBN es la
+clave natural del libro, así que la tabla `books` lo declara como `@Id` sin
+`@GeneratedValue`.
+
+Para probar los endpoints de abajo, el ISBN debe ser válido (13 dígitos con
+dígito de control correcto); `9780306406157` sirve de ejemplo.
+
+```bash
+curl -i -X POST http://localhost:8080/library/books \
+  -H 'Content-Type: application/json' \
+  -d '{"isbn":"9780306406157","author":"Ursula K. Le Guin","title":"The Left Hand of Darkness","publicationDate":"1997-03-03","avaliableCopyNumber":4}'
+
+curl -i http://localhost:8080/library/books/9780306406157
+```
+
+### `GET /library/books/{isbn}` — Obtener un libro
+
+```bash
+curl -i http://localhost:8080/library/books/9780306406157
+```
+
+**200 OK**
+
+```json
+{
+  "isbn": "9780306406157",
+  "author": "Ursula K. Le Guin",
+  "title": "The Left Hand of Darkness",
+  "publicationDate": "1997-03-03",
+  "avaliableCopyNumber": 4
+}
+```
+
+**404 Not Found** — el ISBN no está dado de alta
+
+```json
+{
+  "timestamp": "2026-09-29T16:36:53.834634505Z",
+  "status": 404,
+  "error": "Not Found",
+  "message": "No existe un libro con isbn: 9788491050469",
+  "fieldErrors": {}
+}
+```
+
+**400 Bad Request** — el ISBN no son 13 dígitos. El formato se descarta en el
+borde (`@Pattern`): un valor con otro formato no puede existir en la tabla, así
+que responder 400 es más útil que un 404 para una consulta imposible.
+
+### `POST /library/books` — Dar de alta un libro
+
+```bash
+curl -i -X POST http://localhost:8080/library/books \
+  -H 'Content-Type: application/json' \
+  -d '{"isbn":"9780306406157","author":"Ursula K. Le Guin","title":"The Left Hand of Darkness","publicationDate":"1997-03-03","avaliableCopyNumber":4}'
+```
+
+**201 Created** (con cabecera `Location`)
+
+```
+HTTP/1.1 201
+Location: /library/books/9780306406157
+
+{"isbn":"9780306406157","author":"Ursula K. Le Guin","title":"The Left Hand of Darkness","publicationDate":"1997-03-03","avaliableCopyNumber":4}
+```
+
+**409 Conflict** — el ISBN ya está dado de alta
+
+```json
+{
+  "timestamp": "2026-09-29T16:36:53.834634505Z",
+  "status": 409,
+  "error": "Conflict",
+  "message": "Ya existe un libro con isbn: 9780306406157",
+  "fieldErrors": {}
+}
+```
+
+**400 Bad Request** — datos inválidos, con el detalle por campo
+
+```json
+{
+  "timestamp": "2026-09-29T16:36:53.857440187Z",
+  "status": 400,
+  "error": "Bad Request",
+  "message": "La peticion contiene datos invalidos",
+  "fieldErrors": { "isbn": "el ISBN-13 introducido no es valido" }
+}
+```
+
+#### Modelo de datos
+
+| Campo | Tipo | Obligatorio | Notas |
+|---|---|---|---|
+| `isbn` | `String` | Sí | **Clave primaria.** 13 dígitos con dígito de control válido |
+| `author` | `String` | Sí | Máx. 100 caracteres |
+| `title` | `String` | Sí | Máx. 100 caracteres |
+| `publicationDate` | `LocalDate` | No | ISO-8601. No puede ser futura |
+| `avaliableCopyNumber` | `Long` | Sí | `>= 0` |
+
+---
+
 ## Estructura del proyecto
 
 ```
@@ -160,23 +286,33 @@ src/main/java/library_api/
 ├── LibraryApiApplication.java          # Punto de entrada
 ├── controller/
 │   ├── LibraryController.java          # Endpoint placeholder (GET /library → "ok")
+│   ├── BookController.java             # Endpoints de libro
 │   └── UserController.java             # Endpoints de usuario
 ├── dto/
+│   ├── BookRequest.java                # Entrada (alta de libro)
+│   ├── BookResponse.java               # Salida (lectura de libro)
 │   ├── UserRequest.java                # Entrada (alta). Sin id
 │   └── UserResponse.java               # Salida (lectura). Con id
 ├── entity/
+│   ├── Book.java                       # Entidad JPA. @Id = ISBN-13
 │   ├── User.java                       # Entidad JPA
 │   └── UserStatus.java                 # Enum de estados
 ├── exception/
 │   ├── ApiError.java                   # Cuerpo uniforme de error
+│   ├── BookAlreadyExistsException.java  # ISBN duplicado → 409
+│   ├── BookNotFoundException.java      # ISBN inexistente → 404
 │   ├── GlobalExceptionHandler.java     # Excepciones → respuestas HTTP
 │   └── UserNotFoundException.java      # Excepción de dominio
 ├── repository/
+│   ├── BookRepository.java             # JpaRepository<Book, String>
 │   └── UserRepository.java             # JpaRepository<User, Long>
 ├── service/
+│   ├── BookService.java                # Contrato
+│   ├── BookServiceImpl.java            # Implementación
 │   ├── UserService.java                # Contrato
 │   └── UserServiceImpl.java            # Implementación
 └── util/mapper/
+    ├── BookMapper.java                 # MapStruct (genera BookMapperImpl)
     └── UserMapper.java                 # MapStruct (genera UserMapperImpl)
 
 src/main/resources/
@@ -200,10 +336,14 @@ src/main/resources/
 
 ### Un único mapper
 
-Todo el mapeo pasa por `UserMapper` (MapStruct), declarado con
-`componentModel = SPRING` para que la implementación generada se registre como
-bean. Antes coexistían dos estrategias (el mapper y un factory estático
+Todo el mapeo pasa por `UserMapper` y `BookMapper` (MapStruct), declarados con
+`componentModel = SPRING` para que las implementaciones generadas se registren
+como beans. Antes coexistían dos estrategias (el mapper y un factory estático
 `UserDto.fromEntity`), que se desincronizaban y perdían campos en silencio.
+
+`BookMapper` no ignora ningún campo a propósito: el `isbn` es la clave primaria y
+llega en el request, así que `BookRequest` y `Book` tienen exactamente los mismos
+campos y MapStruct los copia todos en ambos sentidos.
 
 ### Excepciones de dominio
 
@@ -211,6 +351,44 @@ bean. Antes coexistían dos estrategias (el mapper y un factory estático
 lugar de devolver `null`. `GlobalExceptionHandler` la traduce a **404**, junto
 con el resto de errores de validación (400) y una red de seguridad para
 excepciones inesperadas que no filtra detalles internos al cliente.
+
+Los libros siguen el mismo patrón: `BookNotFoundException` → **404** y
+`BookAlreadyExistsException` → **409**.
+
+### El ISBN es un `String`, no un `long`
+
+`BookService.getBookByIsbn` recibe un `String` porque el ISBN-13 no cabe de
+forma fiel en un primitivo numérico (prefijo 978/979, cuerpo de 9 dígitos y
+dígito de control) y, sobre todo, porque `Book.isbn` es la clave primaria
+`String` de la entidad. Un `long` obligaría a convertir la clave al buscar y a
+convertirla de vuelta al guardar, con riesgo de perder el ISBN real.
+
+### ISBN duplicado → 409, no un 201 silencioso
+
+Como el id lo aporta el cliente, un alta repetida haría que Spring Data tomara
+la ruta `merge()` y devolviera **201 Created** sobre un libro que ya existía,
+sin que el cliente se entere de que nada se creó. `addBook` comprueba
+`existsById` **antes** de mapear y persistir, y lanza
+`BookAlreadyExistsException`; la restricción de clave primaria de la base de
+datos sigue siendo la garantía final de unicidad.
+
+### `Long` en el DTO, `long` en la entidad
+
+`BookRequest.avaliableCopyNumber` es un `Long` (wrapper) y no un `long`
+primitivo, aunque la entidad lo declare primitivo. Motivo: Jackson falla con un
+**500** (`Cannot map null into type long`) cuando un primitivo no aparece en el
+JSON, y ese error ocurre al deserializar, **antes** de que Bean Validation pueda
+actuar. Con el wrapper, el campo ausente llega como `null` y lo rechaza el
+`@NotNull`, produciendo el 400 con el detalle por campo que el cliente espera.
+Hay un test de regresión que fija este comportamiento
+(`addBook_sinNumeroDeCopias_devuelve400`).
+
+### Fechas con `java.time`
+
+`Book.publicationDate` es un `java.time.LocalDate` y no un `java.util.Date`:
+`Date` es mutable, no es thread-safe y su API aritmética está obsoleta desde
+Java 8. Para una fecha civil `LocalDate` es el tipo correcto y Jackson lo
+serializa directamente en ISO-8601 (`"1997-03-03"`).
 
 ### Entidad JPA
 
@@ -224,7 +402,15 @@ excepciones inesperadas que no filtra detalles internos al cliente.
 
 - `@Transactional(readOnly = true)` en las lecturas, `@Transactional` en la escritura.
 - Logging SLF4J: `debug` al entrar, `info` al crear (con el id generado),
-  `warn` cuando no se encuentra el recurso.
+  `warn` cuando no se encuentra el recurso o cuando se rechaza un ISBN duplicado.
+
+### Validación en el borde, no en la entidad
+
+Las restricciones (`@NotBlank`, `@Size`, `@ISBN`, `@NotNull`, `@PastOrPresent`,
+`@PositiveOrZero`) viven en `BookRequest`, no en `Book`. Una petición inválida se
+rechaza con un 400 y el detalle por campo sin llegar a abrir una transacción
+contra la base de datos. En `Book` solo quedan las restricciones de esquema
+(`nullable`, `length`), que documentan la forma de la tabla.
 
 ---
 
@@ -253,13 +439,41 @@ correcto es `validate` y correr migraciones con Flyway o Liquibase.
 ./mvnw test
 ```
 
-12 tests repartidos en tres clases:
+32 tests repartidos en seis clases:
 
 | Clase | Tipo | Qué cubre |
 |---|---|---|
+| `BookServiceImplTest` | Unitario (Mockito) | Libro encontrado, no encontrado (**404**), persistencia, no pérdida de campos, ISBN duplicado (**409**) sin escribir |
+| `BookControllerTest` | Slice web (`@WebMvcTest`) | 200, 404, **409**, 400 con errores por campo, 400 por formato de ISBN, 400 por fecha futura, cabecera `Location` |
+| `BookControllerIntegrationTest` | Integración (`@SpringBootTest`) | Recorrido completo controller → service → mapper → repository → H2: alta y posterior lectura, ISBN como clave primaria, 409 sin duplicar fila |
 | `UserServiceImplTest` | Unitario (Mockito) | Usuario encontrado, no encontrado, persistencia, no pérdida de campos, `status` por defecto |
 | `UserControllerTest` | Slice web (`@WebMvcTest`) | 200, **404** en recurso inexistente, 400 con errores por campo, 400 por id no positivo, cabecera `Location`, id del cliente descartado |
 | `LibraryApiApplicationTests` | Contexto | Carga completa de la aplicación |
+
+Los tests de integración son la única capa que valida lo que los unitarios no
+pueden ver: que MapStruct genera la implementación que Spring registra, que el
+ISBN se persiste como clave primaria y que el esquema se crea con los tipos
+correctos.
+
+### Cobertura (JaCoCo)
+
+```bash
+./mvnw test
+# reporte en target/site/jacoco/index.html
+```
+
+El `jacoco-maven-plugin` (0.8.15) arranca los tests con el agente y genera el
+reporte HTML/CSV en cada `test`. Las clases generadas por MapStruct
+(`UserMapperImpl`, `BookMapperImpl`) están **excluidas del reporte**:
+
+```xml
+<exclude>**/*MapperImpl.class</exclude>
+```
+
+La exclusión es por patrón de nombre, no por `@Generated`: MapStruct anota con
+`javax.annotation.processing.Generated`, que tiene retención `SOURCE`, así que
+**no llega al bytecode** y el filtro por defecto de JaCoCo (que analiza
+bytecode) no la ve.
 
 ---
 
@@ -271,8 +485,8 @@ Dos detalles del `pom.xml` que no son obvios y conviene no deshacer:
 
 El bloque `annotationProcessorPaths` estaba dentro de `spring-boot-maven-plugin`,
 donde **solo aplica al goal `repackage`**. Durante la compilación nunca se
-ejecutaba, así que MapStruct no generaba `UserMapperImpl` y la aplicación no
-arrancaba.
+ejecutaba, así que MapStruct no generaba `UserMapperImpl` ni `BookMapperImpl` y la
+aplicación no arrancaba.
 
 **2. `useIncrementalCompilation=false`**
 
@@ -295,6 +509,24 @@ recompila: `./mvnw clean test`.
 **`Cannot invoke "jdk.internal.platform.CgroupInfo.getMountPoint()"`**
 
 Estás con JDK 17.0.2. Cambia a 17.0.10+ (ver [requisitos](#requisitos)).
+
+**`POST /library/books` responde 500 y el body es `Cannot map null into type long`**
+
+El DTO declara un primitivo (`long`) en un campo que el cliente puede omitir.
+Jackson falla al deserializar, antes de la validación. Usa el wrapper `Long`
+con `@NotNull` en el DTO; es justo lo que hace `BookRequest.avaliableCopyNumber`
+(ver [decisiones de diseño](#long-en-el-dto-long-en-la-entidad)).
+
+**`POST /library/books` responde 400 con `el ISBN-13 introducido no es valido`**
+
+El ISBN tiene 13 dígitos pero el dígito de control no cuadra. Se valida el
+formato además de la longitud, así que un dígito mal calculado se rechaza en
+lugar de guardarse.
+
+**`POST /library/books` responde 409**
+
+El ISBN ya está dado de alta. Es intencionado: el id lo aporta el cliente y un
+alta repetida habría hecho un `merge()` devolviendo 201 sobre un libro existente.
 
 **La app arranca pero no aparecen datos**
 
