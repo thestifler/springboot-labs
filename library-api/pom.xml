@@ -121,6 +121,46 @@
 					<useIncrementalCompilation>false</useIncrementalCompilation>
 				</configuration>
 			</plugin>
+
+			<!--
+				Covertura de código con JaCoCo. Se declara la version explicitamente
+				porque spring-boot-dependencies 4.1.1 no la gestiona.
+
+				prepare-agent arranca los tests con el agente de JaCoCo y escribe
+				la ejecucion en target/jacoco.exec. El goal 'report' genera
+				target/site/jacoco/index.html en la fase test.
+
+				Las clases generadas por MapStruct (UserMapperImpl) se excluyen del
+				reporte con un patron de nombre. NO basta con el filtro de '@Generated'
+				de JaCoCo: MapStruct anota con javax.annotation.processing.Generated,
+				que tiene retencion SOURCE, asi que no llega al bytecode y el filtro
+				no la ve. Por eso se excluyen por nombre (**/*MapperImpl.class), que es
+				la practica estandar con MapStruct.
+			-->
+			<plugin>
+				<groupId>org.jacoco</groupId>
+				<artifactId>jacoco-maven-plugin</artifactId>
+				<version>0.8.15</version>
+				<configuration>
+					<excludes>
+						<exclude>**/*MapperImpl.class</exclude>
+					</excludes>
+				</configuration>
+				<executions>
+					<execution>
+						<goals>
+							<goal>prepare-agent</goal>
+						</goals>
+					</execution>
+					<execution>
+						<id>report</id>
+						<phase>test</phase>
+						<goals>
+							<goal>report</goal>
+						</goals>
+					</execution>
+				</executions>
+			</plugin>
 		</plugins>
 	</build>
 
