@@ -1,9 +1,13 @@
 package library_api.controller;
 
 import library_api.entity.Book;
+import library_api.exception.BookNotFoundException;
 import library_api.repository.BookRepository;
+import library_api.service.BookService;
 
 import java.time.LocalDate;
+
+import jakarta.persistence.EntityManager;
 
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -15,6 +19,7 @@ import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.transaction.annotation.Transactional;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
@@ -47,6 +52,12 @@ class BookControllerIntegrationTest {
 
     @Autowired
     private BookRepository bookRepository;
+
+    @Autowired
+    private BookService bookService;
+
+    @Autowired
+    private EntityManager entityManager;
 
     @Test
     @DisplayName("Alta y posterior consulta de un libro: 201 y luego 200 con los mismos datos")
@@ -123,6 +134,113 @@ class BookControllerIntegrationTest {
                 .andExpect(jsonPath("$.status").value(404))
                 .andExpect(jsonPath("$.error").value("Not Found"))
                 .andExpect(jsonPath("$.message").value("No existe un libro con isbn: 9788491050469"));
+    }
+
+    @Test
+    @DisplayName("El descuento de ejemplares se persiste de verdad en la base de datos")
+    void decreaseAvalaibleCopyNumberBook_persisteElNuevoContador() {
+        bookRepository.saveAndFlush(new Book(ISBN, "Autor", "Titulo", LocalDate.of(2000, 1, 1), 2));
+
+        assertThat(bookService.decreaseAvalaibleCopyNumberBook(ISBN)).isTrue();
+        // flush y clear obligan a releer de la base de datos: si el contador no se
+        // hubiera escrito, aqui seguiria viendo 2.
+        entityManager.flush();
+        entityManager.clear();
+
+        assertThat(bookRepository.findById(ISBN).orElseThrow().getAvaliableCopyNumber()).isEqualTo(1);
+    }
+
+    @Test
+    @DisplayName("Un libro agotado devuelve false y conserva el contador en cero")
+    void decreaseAvalaibleCopyNumberBook_sinEjemplares_devuelveFalse() {
+        bookRepository.saveAndFlush(new Book(ISBN, "Autor", "Titulo", LocalDate.of(2000, 1, 1), 0));
+
+        assertThat(bookService.decreaseAvalaibleCopyNumberBook(ISBN)).isFalse();
+
+        entityManager.flush();
+        entityManager.clear();
+
+        assertThat(bookRepository.findById(ISBN).orElseThrow().getAvaliableCopyNumber()).isZero();
+    }
+
+    // ---------------------------------------------------------------------
+    // increaseAvaliableCopyNumberBook
+    // ---------------------------------------------------------------------
+
+    @Test
+    @DisplayName("El incremento de ejemplares se persiste de verdad en la base de datos")
+    void increaseAvaliableCopyNumberBook_persisteElNuevoContador() {
+        bookRepository.saveAndFlush(new Book(ISBN, "Autor", "Titulo", LocalDate.of(2000, 1, 1), 1));
+
+        bookService.increaseAvaliableCopyNumberBook(ISBN);
+
+        // Sin el clear(), findById devolveria la entidad cacheada con el valor
+        // viejo y el test pasaria aunque el UPDATE no se hubiera aplicado.
+        entityManager.flush();
+        entityManager.clear();
+
+        assertThat(bookRepository.findById(ISBN).orElseThrow().getAvaliableCopyNumber()).isEqualTo(2);
+    }
+
+    @Test
+    @DisplayName("Incrementar desde cero funciona: un alta recien creada puede empezar a 0")
+    void increaseAvaliableCopyNumberBook_desdeCero() {
+        bookRepository.saveAndFlush(new Book(ISBN, "Autor", "Titulo", LocalDate.of(2000, 1, 1), 0));
+
+        bookService.increaseAvaliableCopyNumberBook(ISBN);
+
+        entityManager.flush();
+        entityManager.clear();
+
+        assertThat(bookRepository.findById(ISBN).orElseThrow().getAvaliableCopyNumber()).isEqualTo(1);
+    }
+
+    @Test
+    @DisplayName("Varias devoluciones consecutivas suman de una en una")
+    void increaseAvaliableCopyNumberBook_variasVeces() {
+        bookRepository.saveAndFlush(new Book(ISBN, "Autor", "Titulo", LocalDate.of(2000, 1, 1), 5));
+
+        for (int i = 0; i < 3; i++) {
+            bookService.increaseAvaliableCopyNumberBook(ISBN);
+        }
+
+        entityManager.flush();
+        entityManager.clear();
+
+        assertThat(bookRepository.findById(ISBN).orElseThrow().getAvaliableCopyNumber()).isEqualTo(8);
+    }
+
+    @Test
+    @DisplayName("Incrementar un isbn inexistente lanza BookNotFoundException y no crea nada")
+    void increaseAvaliableCopyNumberBook_cuandoNoExiste_lanzaBookNotFoundException() {
+        assertThatThrownBy(() -> bookService.increaseAvaliableCopyNumberBook("9788491050469"))
+                .isInstanceOf(BookNotFoundException.class)
+                .hasMessageContaining("9788491050469");
+
+        // El UPDATE sobre un isbn inexistente no debe insertar una fila nueva.
+        assertThat(bookRepository.existsById("9788491050469")).isFalse();
+    }
+
+    @Test
+    @DisplayName("Reservar y devolver en alternancia deja el contador donde estaba")
+    void increaseYDecrease_enAlternancia_dejanElContadorIgual() {
+        bookRepository.saveAndFlush(new Book(ISBN, "Autor", "Titulo", LocalDate.of(2000, 1, 1), 3));
+
+        bookService.increaseAvaliableCopyNumberBook(ISBN); // 3 -> 4
+        bookService.decreaseAvalaibleCopyNumberBook(ISBN);  // 4 -> 3
+
+        entityManager.flush();
+        entityManager.clear();
+
+        assertThat(bookRepository.findById(ISBN).orElseThrow().getAvaliableCopyNumber()).isEqualTo(3);
+    }
+
+    @Test
+    @DisplayName("Reservar un isbn inexistente propaga BookNotFoundException")
+    void decreaseAvalaibleCopyNumberBook_cuandoNoExiste_lanzaBookNotFoundException() {
+        assertThatThrownBy(() -> bookService.decreaseAvalaibleCopyNumberBook("9788491050469"))
+                .isInstanceOf(BookNotFoundException.class)
+                .hasMessageContaining("9788491050469");
     }
 
     @Test

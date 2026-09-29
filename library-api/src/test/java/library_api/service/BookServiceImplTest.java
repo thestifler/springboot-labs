@@ -19,6 +19,7 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.never;
@@ -134,6 +135,174 @@ class BookServiceImplTest {
         assertThat(result.isbn()).isEqualTo(ISBN);
         assertThat(result.publicationDate()).isEqualTo(LocalDate.of(2008, 8, 1));
         assertThat(result.avaliableCopyNumber()).isEqualTo(7);
+    }
+
+    // ---------------------------------------------------------------------
+    // decreaseAvalaibleCopyNumberBook
+    // ---------------------------------------------------------------------
+
+    @Test
+    @DisplayName("decrease descuenta exactamente un ejemplar")
+    void decrease_cuandoHayCopias_descuentaUna() {
+        Book book = libro(ISBN, "Autor", "Titulo", PUBLICACION, 3);
+
+        when(bookRepository.findByIsbnForUpdate(ISBN)).thenReturn(Optional.of(book));
+
+        boolean reserved = bookService.decreaseAvalaibleCopyNumberBook(ISBN);
+
+        assertThat(reserved).isTrue();
+        // Regresion del post-decremento: setAvaliableCopyNumber(n--) asignaba
+        // el valor anterior y el contador no bajaba nunca.
+        assertThat(book.getAvaliableCopyNumber()).isEqualTo(2);
+    }
+
+    @Test
+    @DisplayName("decrease no persiste explicitamente: la entidad gestionada se sincroniza sola")
+    void decrease_noLlamaASave() {
+        Book book = libro(ISBN, "Autor", "Titulo", PUBLICACION, 3);
+
+        when(bookRepository.findByIsbnForUpdate(ISBN)).thenReturn(Optional.of(book));
+
+        bookService.decreaseAvalaibleCopyNumberBook(ISBN);
+
+        // Dentro de @Transactional la entidad esta gestionada y Hibernate la
+        // escribe por dirty checking. Un save() aqui seria redundante.
+        verify(bookRepository, never()).save(any());
+    }
+
+    @Test
+    @DisplayName("decrease agota el ultimo ejemplar y sigue siendo true")
+    void decrease_conLaUltimaCopia_devuelveTrueYDejaACero() {
+        Book book = libro(ISBN, "Autor", "Titulo", PUBLICACION, 1);
+
+        when(bookRepository.findByIsbnForUpdate(ISBN)).thenReturn(Optional.of(book));
+
+        boolean reserved = bookService.decreaseAvalaibleCopyNumberBook(ISBN);
+
+        assertThat(reserved).isTrue();
+        assertThat(book.getAvaliableCopyNumber()).isZero();
+    }
+
+    @Test
+    @DisplayName("decrease devuelve false sin tocar el contador si no hay ejemplares")
+    void decrease_sinCopias_devuelveFalseYNoModificaElContador() {
+        Book book = libro(ISBN, "Autor", "Titulo", PUBLICACION, 0);
+
+        when(bookRepository.findByIsbnForUpdate(ISBN)).thenReturn(Optional.of(book));
+
+        boolean reserved = bookService.decreaseAvalaibleCopyNumberBook(ISBN);
+
+        assertThat(reserved).isFalse();
+        // Un libro agotado no puede quedar en negativo.
+        assertThat(book.getAvaliableCopyNumber()).isZero();
+        verify(bookRepository, never()).save(any());
+    }
+
+    @Test
+    @DisplayName("decrease lanza BookNotFoundException si el isbn no existe")
+    void decrease_cuandoNoExiste_lanzaBookNotFoundException() {
+        when(bookRepository.findByIsbnForUpdate(ISBN)).thenReturn(Optional.empty());
+
+        assertThatThrownBy(() -> bookService.decreaseAvalaibleCopyNumberBook(ISBN))
+                .isInstanceOf(BookNotFoundException.class)
+                .hasMessageContaining(ISBN);
+    }
+
+    @Test
+    @DisplayName("decrease consulta con la variante bloqueada, no con findById")
+    void decrease_usaElFindBloqueado() {
+        when(bookRepository.findByIsbnForUpdate(ISBN)).thenReturn(Optional.of(libro(ISBN, "A", "T", PUBLICACION, 2)));
+
+        bookService.decreaseAvalaibleCopyNumberBook(ISBN);
+
+        // findById sin bloqueo permitiria que dos reservas concurrentes del
+        // ultimo ejemplar lo consumieran ambas (lost update).
+        verify(bookRepository).findByIsbnForUpdate(ISBN);
+        verify(bookRepository, never()).findById(any());
+    }
+
+    @Test
+    @DisplayName("Varias reservas consecutivas van descontando una a una")
+    void decrease_variasVecesDescuentaDeUnaEnUna() {
+        Book book = libro(ISBN, "Autor", "Titulo", PUBLICACION, 3);
+        when(bookRepository.findByIsbnForUpdate(ISBN)).thenReturn(Optional.of(book));
+
+        assertThat(bookService.decreaseAvalaibleCopyNumberBook(ISBN)).isTrue();
+        assertThat(book.getAvaliableCopyNumber()).isEqualTo(2);
+        assertThat(bookService.decreaseAvalaibleCopyNumberBook(ISBN)).isTrue();
+        assertThat(book.getAvaliableCopyNumber()).isEqualTo(1);
+        assertThat(bookService.decreaseAvalaibleCopyNumberBook(ISBN)).isTrue();
+        assertThat(book.getAvaliableCopyNumber()).isZero();
+        assertThat(bookService.decreaseAvalaibleCopyNumberBook(ISBN)).isFalse();
+        assertThat(book.getAvaliableCopyNumber()).isZero();
+    }
+
+    // ---------------------------------------------------------------------
+    // increaseAvaliableCopyNumberBook
+    // ---------------------------------------------------------------------
+
+    @Test
+    @DisplayName("increase delega el incremento en una unica consulta de actualizacion")
+    void increase_usaElUpdateAtomico() {
+        when(bookRepository.increaseAvaliableCopyNumber(ISBN)).thenReturn(1);
+
+        bookService.increaseAvaliableCopyNumberBook(ISBN);
+
+        // No debe leer antes de escribir: el UPDATE es atomico y no necesita el
+        // valor previo, asi que un findById seria un viaje de mas.
+        verify(bookRepository).increaseAvaliableCopyNumber(ISBN);
+        verify(bookRepository, never()).findById(any());
+        verify(bookRepository, never()).findByIsbnForUpdate(any());
+    }
+
+    @Test
+    @DisplayName("increase no lanza excepcion si el UPDATE afecta a una fila")
+    void increase_cuandoElLibroExiste_noLanza() {
+        when(bookRepository.increaseAvaliableCopyNumber(ISBN)).thenReturn(1);
+
+        assertThatCode(() -> bookService.increaseAvaliableCopyNumberBook(ISBN))
+                .doesNotThrowAnyException();
+    }
+
+    @Test
+    @DisplayName("increase lanza BookNotFoundException si el UPDATE no afecta a ninguna fila")
+    void increase_cuandoElLibroNoExiste_lanzaBookNotFoundException() {
+        // 0 filas afectadas = no existe ningun libro con ese isbn.
+        when(bookRepository.increaseAvaliableCopyNumber(ISBN)).thenReturn(0);
+
+        assertThatThrownBy(() -> bookService.increaseAvaliableCopyNumberBook(ISBN))
+                .isInstanceOf(BookNotFoundException.class)
+                .hasMessageContaining(ISBN);
+    }
+
+    @Test
+    @DisplayName("increase no toca la entidad en memoria ni persiste con save")
+    void increase_noGuardaLaEntidad() {
+        when(bookRepository.increaseAvaliableCopyNumber(ISBN)).thenReturn(1);
+
+        bookService.increaseAvaliableCopyNumberBook(ISBN);
+
+        // El UPDATE se ejecuta en la base de datos; la entidad no se carga ni se
+        // modifica en memoria, asi que no hay nada que guardar.
+        verify(bookRepository, never()).save(any());
+        verifyNoInteractions(bookMapper);
+    }
+
+    @Test
+    @DisplayName("increase y decrease se alternan Leaving el contador coherente")
+    void increase_yDecrease_seAlternan() {
+        Book book = libro(ISBN, "Autor", "Titulo", PUBLICACION, 2);
+        when(bookRepository.findByIsbnForUpdate(ISBN)).thenReturn(Optional.of(book));
+        when(bookRepository.increaseAvaliableCopyNumber(ISBN)).thenReturn(1);
+
+        // Devolver un ejemplar (UPDATE atomico) y reservar otro (entidad en
+        // memoria) tienen que dejar el contador donde estaba.
+        bookService.increaseAvaliableCopyNumberBook(ISBN);
+        bookService.decreaseAvalaibleCopyNumberBook(ISBN);
+
+        assertThat(book.getAvaliableCopyNumber()).isEqualTo(1);
+        verify(bookRepository).increaseAvaliableCopyNumber(ISBN);
+        verify(bookRepository).findByIsbnForUpdate(ISBN);
     }
 
     private BookRequest request(String isbn, String author, String title, LocalDate publicationDate,

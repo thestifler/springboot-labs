@@ -68,4 +68,63 @@ public class BookServiceImpl implements BookService {
         log.info("Libro creado con isbn={}", saved.getIsbn());
         return bookMapper.toResponse(saved);
     }
+
+    @Override
+    @Transactional
+    public boolean decreaseAvalaibleCopyNumberBook(String isbn) {
+        log.debug("Reservando un ejemplar del libro con isbn={}", isbn);
+
+        // findByIsbnForUpdate bloquea la fila hasta el commit, de modo que el
+        // leer-modificar-escribir del contador no se solapa con otra reserva del
+        // mismo libro. Sin este bloqueo, dos reservas concurrentes del ultimo
+        // ejemplar disponible podrian consumirlo ambas (lost update).
+        Book book = bookRepository.findByIsbnForUpdate(isbn)
+                .orElseThrow(() -> {
+                    log.warn("No existe libro con isbn={}", isbn);
+                    return new BookNotFoundException(isbn);
+                });
+
+        long availableCopies = book.getAvaliableCopyNumber();
+        if (availableCopies < 1) {
+            // El libro existe pero esta agotado: no es un error, es un resultado
+            // de negocio valido, asi que se informa con false en vez de lanzar.
+            log.warn("No hay ejemplares disponibles del libro con isbn={}", isbn);
+            return false;
+        }
+
+        // Post-decremento en la asignacion: numberAvaliable-- entregaria a
+        // setAvaliableCopyNumber() el valor ANTERIOR y solo decrementaria la
+        // variable local, con lo que el contador nunca bajaria.
+        book.setAvaliableCopyNumber(availableCopies - 1);
+
+        // No hace falta save(): dentro de la transaccion la entidad esta
+        // gestionada y Hibernate la sincroniza sola por dirty checking al
+        // commitear. Un save() explicito de una entidad ya gestionada seria un
+        // no-op.
+        log.info("Ejemplar reservado del libro con isbn={}, quedan={}", isbn, book.getAvaliableCopyNumber());
+
+        return true;
+    }
+
+    @Override
+    @Transactional
+    public void increaseAvaliableCopyNumberBook(String isbn) {
+        log.debug("Devolviendo un ejemplar del libro con isbn={}", isbn);
+
+        // Devolver un ejemplar no requiere leer el valor previo: sumar sobre el
+        // dato almacenado es atomico en un unico UPDATE, sin necesidad de leer y
+        // luego escribir. Por eso no se bloquea la fila como en el descuento.
+        //
+        // El numero de filas afectadas resuelve ademas la existencia del libro
+        // en la misma consulta: 0 filas significa que no hay ningun libro con
+        // ese isbn.
+        int updatedRows = bookRepository.increaseAvaliableCopyNumber(isbn);
+
+        if (updatedRows == 0) {
+            log.warn("No existe libro con isbn={}", isbn);
+            throw new BookNotFoundException(isbn);
+        }
+
+        log.info("Ejemplar devuelto del libro con isbn={}", isbn);
+    }
 }
