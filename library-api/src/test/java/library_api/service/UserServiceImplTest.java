@@ -2,6 +2,7 @@ package library_api.service;
 
 import library_api.dto.UserRequest;
 import library_api.dto.UserResponse;
+import library_api.dto.UserStatusRequest;
 import library_api.entity.User;
 import library_api.entity.UserStatus;
 import library_api.exception.UserNotFoundException;
@@ -131,5 +132,97 @@ class UserServiceImplTest {
         User user = new User(name, first, second, status);
         user.setId(id);
         return user;
+    }
+
+    // ---------------------------------------------------------------------
+    // updateUserStatus
+    // ---------------------------------------------------------------------
+
+    @Test
+    @DisplayName("updateUserStatus cambia el estado del usuario")
+    void updateUserStatus_cambiaElEstado() {
+        User entity = userConId(1L, "Ana", "Gomez", "Ruiz", UserStatus.ACTIVE);
+        UserStatusRequest request = new UserStatusRequest(UserStatus.SUSPENDED);
+        when(userRepository.findById(1L)).thenReturn(Optional.of(entity));
+        when(userMapper.toResponse(entity))
+                .thenReturn(new UserResponse(1L, "Ana", "Gomez", "Ruiz", UserStatus.SUSPENDED));
+
+        UserResponse result = userService.updateUserStatus(1L, request);
+
+        assertThat(result.status()).isEqualTo(UserStatus.SUSPENDED);
+        assertThat(entity.getStatus()).isEqualTo(UserStatus.SUSPENDED);
+    }
+
+    @Test
+    @DisplayName("updateUserStatus no guarda la entidad: la sincroniza Hibernate")
+    void updateUserStatus_noGuardaLaEntidad() {
+        User entity = userConId(1L, "Ana", "Gomez", "Ruiz", UserStatus.ACTIVE);
+        when(userRepository.findById(1L)).thenReturn(Optional.of(entity));
+        when(userMapper.toResponse(entity))
+                .thenReturn(new UserResponse(1L, "Ana", "Gomez", "Ruiz", UserStatus.INACTIVE));
+
+        userService.updateUserStatus(1L, new UserStatusRequest(UserStatus.INACTIVE));
+
+        // Un save() explicito de una entidad ya gestionada seria un no-op dentro de
+        // la transaccion: el dirty checking se encarga.
+        verify(userRepository, never()).save(any());
+    }
+
+    @Test
+    @DisplayName("updateUserStatus es idempotente: volver a poner el mismo estado no es un error")
+    void updateUserStatus_mismoEstado_esIdempotente() {
+        User entity = userConId(1L, "Ana", "Gomez", "Ruiz", UserStatus.ACTIVE);
+        when(userRepository.findById(1L)).thenReturn(Optional.of(entity));
+        when(userMapper.toResponse(entity))
+                .thenReturn(new UserResponse(1L, "Ana", "Gomez", "Ruiz", UserStatus.ACTIVE));
+
+        UserResponse result = userService.updateUserStatus(1L, new UserStatusRequest(UserStatus.ACTIVE));
+
+        // Devolver 200 deja que el cliente reintente sin miedo, en vez de recibir un
+        // 409 por algo que no es un conflicto real.
+        assertThat(result.status()).isEqualTo(UserStatus.ACTIVE);
+    }
+
+    @Test
+    @DisplayName("updateUserStatus reactiva un usuario suspendido")
+    void updateUserStatus_reactivaUnUsuarioSuspendido() {
+        User entity = userConId(1L, "Ana", "Gomez", "Ruiz", UserStatus.SUSPENDED);
+        when(userRepository.findById(1L)).thenReturn(Optional.of(entity));
+        when(userMapper.toResponse(entity))
+                .thenReturn(new UserResponse(1L, "Ana", "Gomez", "Ruiz", UserStatus.ACTIVE));
+
+        UserResponse result = userService.updateUserStatus(1L, new UserStatusRequest(UserStatus.ACTIVE));
+
+        assertThat(result.status()).isEqualTo(UserStatus.ACTIVE);
+    }
+
+    @Test
+    @DisplayName("updateUserStatus lanza UserNotFoundException si el usuario no existe")
+    void updateUserStatus_usuarioInexistente_lanzaUserNotFound() {
+        when(userRepository.findById(99L)).thenReturn(Optional.empty());
+
+        assertThatThrownBy(() ->
+                userService.updateUserStatus(99L, new UserStatusRequest(UserStatus.SUSPENDED)))
+                .isInstanceOf(UserNotFoundException.class)
+                .hasMessageContaining("99");
+
+        verify(userMapper, never()).toResponse(any());
+    }
+
+    @Test
+    @DisplayName("updateUserStatus no toca el nombre ni los apellidos")
+    void updateUserStatus_noAfectaLosDemasCampos() {
+        User entity = userConId(1L, "Ana", "Gomez", "Ruiz", UserStatus.ACTIVE);
+        when(userRepository.findById(1L)).thenReturn(Optional.of(entity));
+        when(userMapper.toResponse(entity))
+                .thenReturn(new UserResponse(1L, "Ana", "Gomez", "Ruiz", UserStatus.INACTIVE));
+
+        userService.updateUserStatus(1L, new UserStatusRequest(UserStatus.INACTIVE));
+
+        // Es la razon de que el endpoint sea PATCH: cambiar el estado no obliga al
+        // cliente a reenviar el resto del recurso y arriesgarse a perderlo.
+        assertThat(entity.getName()).isEqualTo("Ana");
+        assertThat(entity.getFirstLastName()).isEqualTo("Gomez");
+        assertThat(entity.getSecondLastName()).isEqualTo("Ruiz");
     }
 }

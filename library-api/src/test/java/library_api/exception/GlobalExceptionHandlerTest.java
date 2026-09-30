@@ -1,6 +1,7 @@
 package library_api.exception;
 
 import java.lang.reflect.Method;
+import java.util.List;
 import java.util.Map;
 
 import org.junit.jupiter.api.DisplayName;
@@ -8,15 +9,21 @@ import org.junit.jupiter.api.Test;
 import org.springframework.core.MethodParameter;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.validation.BeanPropertyBindingResult;
 import org.springframework.validation.FieldError;
+import org.springframework.validation.method.MethodValidationResult;
+import org.springframework.validation.method.ParameterErrors;
 import org.springframework.web.ErrorResponseException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.method.annotation.HandlerMethodValidationException;
+import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
 
 import jakarta.validation.ConstraintViolationException;
 
+import library_api.controller.LoanController;
 import library_api.dto.BookRequest;
+import library_api.entity.UserStatus;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.mock;
@@ -97,10 +104,131 @@ class GlobalExceptionHandlerTest {
         assertThat(ex.getIsbn()).isEqualTo("9780306406157");
     }
 
+    @Test
+    @DisplayName("UserNotActiveException se traduce a 409, no a 404")
+    void userNotActive_devuelve409YNo404() {
+        ResponseEntity<ApiError> response =
+                handler.handleUserNotActive(new UserNotActiveException(42L, UserStatus.SUSPENDED));
+
+        // El usuario existe: lo unico que choca es que esta en estado SUSPENDED.
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.CONFLICT);
+        assertThat(response.getStatusCode()).isNotEqualTo(HttpStatus.NOT_FOUND);
+        assertThat(response.getBody().status()).isEqualTo(409);
+        assertThat(response.getBody().message()).contains("42").contains("SUSPENDED");
+    }
+
+    @Test
+    @DisplayName("Un id no numerico en la ruta se traduce a 400, no a 500")
+    void typeMismatch_devuelve400YNo500() throws Exception {
+        MethodArgumentTypeMismatchException ex = new MethodArgumentTypeMismatchException(
+                "no-es-un-numero", Long.class, "id", loanIdParameter(),
+                new NumberFormatException("For input string: \"no-es-un-numero\""));
+
+        ResponseEntity<ApiError> response = handler.handleTypeMismatch(ex);
+
+        // En Spring Framework 7 MethodArgumentTypeMismatchException hereda de
+        // TypeMismatchException y ya NO implementa ErrorResponse. Sin este handler
+        // caia en handleUnexpected y devolvia 500 por un fallo del cliente, que es
+        // justo lo que un cliente no puede diagnosticar.
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+        assertThat(response.getBody().status()).isEqualTo(400);
+        // El mensaje nombra el parametro culpable para que el cliente sepa que
+        // corregir, sin filtrar nombres de clases Java.
+        assertThat(response.getBody().message()).contains("id");
+    }
+
+    @Test
+    @DisplayName("LoanAlreadyLoanedException se traduce a 409, no a 404")
+    void loanAlreadyLoaned_devuelve409YNo404() {
+        ResponseEntity<ApiError> response =
+                handler.handleLoanAlreadyLoaned(new LoanAlreadyLoanedException(42L, "9780306406157"));
+
+        // Usuario y libro existen; el conflicto es que ya hay un prestamo abierto.
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.CONFLICT);
+        assertThat(response.getStatusCode()).isNotEqualTo(HttpStatus.NOT_FOUND);
+        assertThat(response.getBody().status()).isEqualTo(409);
+        assertThat(response.getBody().message()).contains("9780306406157");
+    }
+
+    @Test
+    @DisplayName("LoanNotFoundException se traduce a 404 Not Found")
+    void loanNotFound_devuelve404() {
+        ResponseEntity<ApiError> response = handler.handleLoanNotFound(new LoanNotFoundException(7L));
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.NOT_FOUND);
+        assertThat(response.getBody().status()).isEqualTo(404);
+        assertThat(response.getBody().message()).contains("7");
+    }
+
+    @Test
+    @DisplayName("LoanAlreadyReturnedException se traduce a 409, no a 404 ni a un 200 silencioso")
+    void loanAlreadyReturned_devuelve409() {
+        ResponseEntity<ApiError> response =
+                handler.handleLoanAlreadyReturned(new LoanAlreadyReturnedException(7L));
+
+        // El prestamo existe y esta cerrado: es un conflicto con su estado, no un
+        // recurso inexistente. Y el 409 es lo que evita que un reintento del cliente
+        // se tome por un segundo ejemplar devuelto.
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.CONFLICT);
+        assertThat(response.getStatusCode()).isNotEqualTo(HttpStatus.NOT_FOUND);
+        assertThat(response.getBody().message()).contains("7");
+    }
+
+    @Test
+    @DisplayName("LoanLimitExceededException se traduce a 409 e informa del limite")
+    void loanLimitExceeded_devuelve409() {
+        ResponseEntity<ApiError> response =
+                handler.handleLoanLimitExceeded(new LoanLimitExceededException(42L, 3));
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.CONFLICT);
+        assertThat(response.getBody().message()).contains("42").contains("3");
+    }
+
+    @Test
+    @DisplayName("LoanNotRenewableException se traduce a 409 y explica el motivo")
+    void loanNotRenewable_devuelve409() {
+        ResponseEntity<ApiError> porVencimiento =
+                handler.handleLoanNotRenewable(LoanNotRenewableException.porVencimiento(7L));
+        ResponseEntity<ApiError> porLimite =
+                handler.handleLoanNotRenewable(LoanNotRenewableException.porLimiteDeRenovaciones(7L, 2));
+
+        assertThat(porVencimiento.getStatusCode()).isEqualTo(HttpStatus.CONFLICT);
+        // Los dos motivos comparten codigo pero no mensaje: el cliente necesita
+        // distinguir "devuelvelo ya" de "no hay mas renovaciones".
+        assertThat(porVencimiento.getBody().message()).contains("vencido");
+        assertThat(porLimite.getBody().message()).contains("2");
+    }
+
+    @Test
+    @DisplayName("Un cuerpo con un enum invalido se traduce a 400, no a 500")
+    void cuerpoConEnumInvalido_devuelve400YNo500() {
+        HttpMessageNotReadableException ex = cuerpoNoInterpretable();
+
+        ResponseEntity<ApiError> response = handler.handleUnreadableBody(ex);
+
+        // HttpMessageNotReadableException NO implementa ErrorResponse, asi que sin
+        // este handler caia en handleUnexpected y devolvia 500 por un fallo del
+        // cliente.
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+        assertThat(response.getBody().status()).isEqualTo(400);
+    }
+
+    @Test
+    @DisplayName("El error de deserializacion no filtra nombres de clases Java al cliente")
+    void cuerpoConEnumInvalido_noFiltraNombresDeClases() {
+        HttpMessageNotReadableException ex = cuerpoNoInterpretable();
+
+        ResponseEntity<ApiError> response = handler.handleUnreadableBody(ex);
+
+        assertThat(response.getBody().message())
+                .doesNotContain("library_api")
+                .doesNotContain("UserStatus")
+                .doesNotContain("Cannot deserialize");
+    }
+
     // ---------------------------------------------------------------------
     // Validacion (400)
     // ---------------------------------------------------------------------
-
     @Test
     @DisplayName("Un cuerpo invalido se traduce a 400 con un error por campo")
     void cuerpoInvalido_devuelve400ConErroresPorCampo() throws Exception {
@@ -154,6 +282,37 @@ class GlobalExceptionHandlerTest {
     }
 
     @Test
+    @DisplayName("Los errores de campo de un HandlerMethodValidationException llegan al cliente")
+    void parametroDeMetodoInvalido_extraeLosErroresPorCampo() throws Exception {
+        // Esta es la trampa de Spring 6.1+: cuando el metodo tiene AL MENOS UNA
+        // restriccion propia (el @Positive del id de ruta en
+        // UserController.updateUserStatus), la validacion del @Valid @RequestBody
+        // tambien se canaliza por HandlerMethodValidationException en vez de por
+        // MethodArgumentNotValidException. Si el handler solo copia ex.getMessage(),
+        // el 400 llega con fieldErrors VACIO y el cliente no tiene ni idea de que
+        // campo esta mal. Este test lo fija.
+        BeanPropertyBindingResult bindingResult = new BeanPropertyBindingResult(
+                new BookRequest(null, null, null, null, null), "bookRequest");
+        bindingResult.addError(new FieldError("bookRequest", "status", "el status es obligatorio"));
+
+        ParameterErrors beanErrors = new ParameterErrors(
+                bookRequestParameter(), new BookRequest(null, null, null, null, null),
+                bindingResult, null, null, null);
+
+        HandlerMethodValidationException ex = new HandlerMethodValidationException(
+                MethodValidationResult.create(
+                        this, endpointDeEjemploMethod(), List.of(beanErrors)));
+
+        ResponseEntity<ApiError> response = handler.handleInvalidMethodArgument(ex);
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+        assertThat(response.getBody().fieldErrors())
+                .containsExactly(Map.entry("status", "el status es obligatorio"));
+        // Y el mensaje deja de ser el criptico "400 BAD_REQUEST ...".
+        assertThat(response.getBody().message()).isEqualTo("La peticion contiene datos invalidos");
+    }
+
+    @Test
     @DisplayName("Una ConstraintViolationException se traduce a 400")
     void constraintViolation_devuelve400() {
         ResponseEntity<ApiError> response =
@@ -194,8 +353,35 @@ class GlobalExceptionHandlerTest {
         assertThat(response.getBody().status()).isEqualTo(405);
     }
 
+    /**
+     * Excepcion de Jackson con el mensaje que Spring produce al no poder convertir
+     * un enum. El HttpInputMessage va a null porque el handler no lo consulta: solo
+     * lo lee el mensaje. Spring Framework 7 ya no ofrece el constructor de un solo
+     * argumento, asi que el segundo es obligatorio.
+     */
+    private static HttpMessageNotReadableException cuerpoNoInterpretable() {
+        return new HttpMessageNotReadableException(
+                "Cannot deserialize value of type `library_api.entity.UserStatus` "
+                        + "from String \"PENDIENTE\"", null);
+    }
+
     private static MethodParameter bookRequestParameter() throws NoSuchMethodException {
         Method method = GlobalExceptionHandlerTest.class.getDeclaredMethod("endpointDeEjemplo", BookRequest.class);
+        return new MethodParameter(method, 0);
+    }
+
+    private static Method endpointDeEjemploMethod() throws NoSuchMethodException {
+        return GlobalExceptionHandlerTest.class.getDeclaredMethod("endpointDeEjemplo", BookRequest.class);
+    }
+
+    /**
+     * MethodParameter del id de ruta de LoanController.getLoan. El constructor de
+     * MethodArgumentTypeMismatchException exige el MethodParameter, y el handler solo
+     * usa ex.getName(), asi que puede ser cualquiera: lo unico que importa es que
+     * getName() devuelva "id".
+     */
+    private static MethodParameter loanIdParameter() throws NoSuchMethodException {
+        Method method = LoanController.class.getMethod("getLoan", Long.class);
         return new MethodParameter(method, 0);
     }
 
