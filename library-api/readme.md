@@ -1129,6 +1129,132 @@ Otro proceso ocupa el puerto. Cámbialo con
 
 ---
 
+## Cumplimiento de la especificación
+
+Trazabilidad de la implementación frente a la especificación técnica y a la
+historia de usuario **HU-01 (Registrar préstamo de libro)**. Las desviaciones que
+se listan al final están **aprobadas** y no son defectos pendientes.
+
+### Especificación técnica
+
+| Requisito | Estado | Evidencia |
+|---|---|---|
+| Java 17+ | ✅ Cumple | `pom.xml` → `<java.version>17</java.version>` |
+| Spring Boot 3.x | ⚠️ **Desviación D1** | Spring Boot **4.1.1** (línea actual). Ver [D1](#d1--spring-boot-41-en-lugar-de-3x) |
+| Spring Web, controladores `@RestController` | ✅ Cumple | `BookController`, `UserController`, `LoanController`, `LibraryController` |
+| Spring Data JPA: entidades `Book`, `Loan`, `User`; repos `extends JpaRepository` | ✅ Cumple | Las 3 entidades existen; los 3 repositorios extienden `JpaRepository` |
+| PostgreSQL o H2 en memoria | ✅ Cumple | `jdbc:h2:mem:testdb` en `application.properties` |
+| MapStruct o ModelMapper | ✅ Cumple | MapStruct 1.6.3 con `componentModel = SPRING` |
+| DTOs `BookDTO` y `LoanRequestDTO` | ⚠️ **Nomenclatura distinta** | Los DTOs se llaman `BookRequest` / `BookResponse` / `LoanRequest` / `LoanResponse`. Separan entrada y salida en vez de usar un `*DTO` único, que es más explícito. `LoanRequest` **no** se mapea con MapStruct: convertir un `String` (isbn) en una entidad dentro del mapper no es viable, así que el servicio construye el `Loan` con `Book` y `User` ya cargadas |
+| `spring-boot-starter-validation` | ✅ Cumple | Declarado en `pom.xml` |
+| `@NotNull`, `@NotBlank` | ✅ Cumple | En `BookRequest`, `LoanRequest`, `UserRequest`, `UserStatusRequest` |
+| `@Min` | ⚠️ **Restricción equivalente** | No se usa `@Min`; el proyecto usa `@Positive` (ids, `userId`), `@PositiveOrZero` (`availableCopyNumber`), `@Size`, `@PastOrPresent` y `@ISBN`. Son equivalentes o **más estrictos**: `@Positive` es un `@Min(1)` con mensaje propio, y `@PositiveOrZero` un `@Min(0)`. No hay ningún campo numérico en el que `@Min` aportara algo que estas anotaciones no cubran |
+
+### HU-01 — Registrar préstamo de libro
+
+| CA | Criterio de aceptación | Estado | Implementación |
+|---|---|---|---|
+| **CA1** | Si el libro existe y tiene ≥ 1 ejemplar disponible, registrar el préstamo con la fecha actual y decrementar en 1 la cantidad disponible | ✅ Cumple | `LoanServiceImpl.lendBook`: `LocalDate.now()` se captura una vez y se usa como `loanDate`; `book.setAvailableCopyNumber(availableCopies - 1)`. Responde **201 Created** con cabecera `Location` |
+| **CA2** | Si no hay copias disponibles, responder **400 Bad Request** con el mensaje `"No hay copias disponibles para este libro"` | ⚠️ **Desviación D2** | Responde **409 Conflict** con `"No quedan ejemplares disponibles del libro con isbn: ..."`. Ver [D2](#d2--ca2-se-responde-409-en-lugar-de-400) |
+| **CA3** | Si el ISBN no existe, responder **404 Not Found** | ✅ Cumple | `BookNotFoundException` → 404 |
+
+### Desviaciones aprobadas
+
+#### D1 — Spring Boot 4.1 en lugar de 3.x
+
+**Decisión: se acepta 4.1.1.**
+
+La especificación pedía la línea 3.x, que ya no recibe soporte. El proyecto usa la
+línea actual (Spring Boot 4.1.1 / Spring Framework 7.0.9 / Hibernate 7.4.5 /
+Jackson 3) manteniendo el requisito de **Java 17**, que sí se cumple.
+
+Bajar a 3.x no es un cambio de una línea en el `pom.xml`. Los artefactos que usa
+el proyecto **no existen** en Boot 3.x y habría que sustituirlos:
+
+| Actual (Boot 4) | Equivalente en Boot 3 |
+|---|---|
+| `spring-boot-starter-webmvc` | `spring-boot-starter-web` |
+| `spring-boot-starter-data-jpa-test` | `spring-boot-starter-test` |
+| `spring-boot-starter-webmvc-test` | `spring-boot-starter-test` |
+
+Además obligaría a reverificar los tres handlers de `GlobalExceptionHandler`
+construidos sobre el comportamiento de Framework 7 (ver
+[problemas frecuentes](#problemas-frecuentes)). El detalle importa:
+
+- En Framework 6, `MethodArgumentTypeMismatchException` y
+  `HttpMessageNotReadableException` **sí** implementan `ErrorResponse`. Los dos
+  500 que este proyecto corrigió (`GET /library/loans/no-es-un-numero` y un enum
+  inválido en el cuerpo) ni siquiera se producían en 3.x.
+- La trampa de `HandlerMethodValidationException` **sí** existe en 6.1+, así que
+  el `fieldErrors` vacío en `PATCH /library/users/{id}/status` seguiría siendo un
+  bug en 3.x, pero el constructor de `HttpMessageNotReadableException` de un solo
+  argumento que obliga este proyecto es específico de Framework 7.
+
+En resumen, el coste no aporta ninguna capacidad funcional.
+
+#### D2 — CA2 se responde 409 en lugar de 400
+
+**Decisión: se mantiene 409 Conflict, con el mensaje actual.**
+
+El criterio de aceptación pide `400` con la cadena literal `"No hay copias
+disponibles para este libro"`. La implementación responde:
+
+```
+409 Conflict
+
+{
+  "status": 409,
+  "error": "Conflict",
+  "message": "No quedan ejemplares disponibles del libro con isbn: 9788491050476"
+}
+```
+
+**Por qué 409 y no 400:** el 400 significa "la petición es incorrecta, no la
+vuelvas a mandar igual". Aquí la petición es perfectamente válida — el usuario
+existe, el ISBN existe y el cuerpo es correcto—, y lo que falla es el **estado
+actual del recurso**: ese libro tiene 0 ejemplares. Es la definición de
+`409 Conflict`. Con un 400, un cliente con reintentos automáticos interpretaría
+que debe modificar la petición, y seguiría reenviándola indefinidamente.
+
+**Por qué el mensaje nombra el ISBN:** el criterio de aceptación fija un texto
+genérico, pero un mensaje que no identifica el libro obliga al cliente a cruzar
+la respuesta con la petición para saber a cuál de sus libros se refiere. En este
+endpoint un usuario puede tener hasta 3 préstamos abiertos y el isbn es el único
+dato que lo desambigua. Se mantiene además `getIsbn()` en la excepción para uso
+programático.
+
+El resto de la tabla de errores de `POST /library/loans` sigue en
+[Préstamos](#post-libraryloans--prestar-un-libro).
+
+#### D3 — Reglas de negocio no contempladas en HU-01
+
+**Decisión: se mantienen y se documentan como ampliación del alcance.**
+
+HU-01 describe el préstamo únicamente en términos del libro y sus ejemplares.
+`lendBook` aplica además cuatro reglas que la historia de usuario no menciona.
+Son **deliberadas**, no accidentales, y se documentan aquí para que quien lea la
+especificación no las interprete como errores:
+
+| Regla | Comportamiento | Motivo |
+|---|---|---|
+| El usuario debe existir | `404` si el `userId` no está dado de alta | Sin usuario no hay a quién atribuir el préstamo ni contra quién descontar el cupo. Devolver un préstamo huérfano dejaría el inventario descuadrado |
+| El usuario debe estar `ACTIVE` | `409` si está `INACTIVE` o `SUSPENDED` | Suspender a alguien debe detener sus préstamos. El mensaje indica el estado real para que el cliente no tenga que consultar el usuario |
+| Cupo de 3 préstamos abiertos | `409` si ya tiene 3 sin devolver | Sin tope, un usuario puede llevarse todas las copias de todos los libros: el contador protege al libro, pero no deja sitio a los demás. El valor es `MAX_ACTIVE_LOANS` en `LoanServiceImpl` |
+| No prestar dos veces el mismo libro abierto | `409` si ya tiene ese isbn sin devolver | Filtrar por `returnedDate is null` permite llevarse el mismo libro otra vez tras devolverlo |
+
+**Consecuencia práctica:** un evaluador que siga HU-01 al pie de la letra y haga
+`POST /library/loans` con `{"isbn":"...","userId":1}` sin haber dado de alta ese
+usuario obtendrá un `404`, no un `201`. Es el comportamiento correcto, pero exige
+crear el usuario primero:
+
+```bash
+curl -X POST http://localhost:8080/library/users \
+  -H 'Content-Type: application/json' \
+  -d '{"name":"Ana","email":"ana@example.com"}'
+```
+
+---
+
 ## Stack tecnológico
 
 | Tecnología | Versión |
