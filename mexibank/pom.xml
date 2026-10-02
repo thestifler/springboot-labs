@@ -1,0 +1,404 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+	xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+	<modelVersion>4.0.0</modelVersion>
+	<parent>
+		<groupId>org.springframework.boot</groupId>
+		<artifactId>spring-boot-starter-parent</artifactId>
+		<version>4.1.1</version>
+		<relativePath/> <!-- lookup parent from repository -->
+	</parent>
+	<groupId>com.github.eldermau</groupId>
+	<artifactId>mexibank</artifactId>
+	<version>0.0.1-SNAPSHOT</version>
+	<name>mexibank</name>
+	<description/>
+	<url/>
+	<licenses>
+		<license/>
+	</licenses>
+	<developers>
+		<developer/>
+	</developers>
+	<scm>
+		<connection/>
+		<developerConnection/>
+		<tag/>
+		<url/>
+	</scm>
+	<properties>
+		<java.version>17</java.version>
+		<!--
+			MapStruct NO lo gestiona spring-boot-dependencies, asi que la version se
+			fija aqui. 1.6.3 es la ultima estable: 1.7.0 solo ha salido en beta.
+		-->
+		<org.mapstruct.version>1.6.3</org.mapstruct.version>
+		<!--
+			ArchUnit tampoco lo gestiona el BOM de Spring Boot (no es un artefacto
+			suyo), por eso necesita version explicita.
+		-->
+		<com.tngtech.archunit.version>1.5.1</com.tngtech.archunit.version>
+		<!--
+			springdoc-openapi genera el contrato OpenAPI a partir del codigo y sirve
+			Swagger UI. El BOM de Spring Boot tampoco lo gestiona (no es un artefacto
+			suyo), por eso lleva version explicita.
+
+			La linea 3.x es la que soporta Spring Boot 4 / Spring Framework 7. La 2.x
+			es para Boot 3 y no arranca con Jackson 3.
+		-->
+		<org.springdoc.version>3.1.1</org.springdoc.version>
+		<!--
+			lombok-mapstruct-binding lo publica Lombok con numeracion propia
+			(0.1.0 y 0.2.0), no heredada de la version de Lombok, asi que el BOM
+			de Spring Boot no la gestiona y hay que fijarla aqui. Ver la nota del
+			maven-compiler-plugin mas abajo para que hace falta.
+		-->
+		<lombok.mapstruct.binding.version>0.2.0</lombok.mapstruct.binding.version>
+	</properties>
+	<dependencies>
+		<dependency>
+			<groupId>org.springframework.boot</groupId>
+			<artifactId>spring-boot-starter-data-jpa</artifactId>
+		</dependency>
+		<dependency>
+			<groupId>org.springframework.boot</groupId>
+			<artifactId>spring-boot-starter-webmvc</artifactId>
+		</dependency>
+
+		<dependency>
+			<groupId>org.springframework.boot</groupId>
+			<artifactId>spring-boot-starter-actuator</artifactId>
+		</dependency>
+
+		<!--
+			Bean Validation. En Spring Boot 4 ya no viene arrastrado por el starter de
+			web: sin esto no hay @Valid ni @NotBlank y el borde no puede rechazar una
+			peticion invalida.
+		-->
+		<dependency>
+			<groupId>org.springframework.boot</groupId>
+			<artifactId>spring-boot-starter-validation</artifactId>
+		</dependency>
+
+		<!--
+			Documentacion de la API: springdoc lee los controladores y los DTO y
+			publica el contrato OpenAPI en /v3/api-docs; swagger-ui es la pagina
+			navegable que ademas permite probar los endpoints desde el navegador.
+
+			Se anade como dependencia de runtime (no de test) porque la aplicacion
+			desplegada tambien sirve la documentacion. En produccion se puede apagar
+			con springdoc.api-docs.enabled=false sin tener que tocar el codigo.
+
+			No confundir con el springdoc que "documenta" los DTO por reflexion: el
+			contrato se enriquece con anotaciones (@Operation, @Schema) en el borde,
+			que es donde vive el conocimiento de HTTP.
+		-->
+		<dependency>
+			<groupId>org.springdoc</groupId>
+			<artifactId>springdoc-openapi-starter-webmvc-ui</artifactId>
+			<version>${org.springdoc.version}</version>
+		</dependency>
+
+		<!--
+			Spring Security. Aporta el starter de web (filtros, SecurityContext) y la
+			autorizacion baseda en roles. La version (7.1.x) la gestiona el BOM de
+			Spring Boot y no se declara.
+
+			Nota: al añadirlo, TODOS los endpoints pasan a requerir autenticacion.
+			Eso es lo correcto para una API, pero significa que el filtro de tokens
+			y las reglas de authorizeHttpRequests son lo que decide que queda
+			abierto; no hay ningun endpoint publico por definicion.
+		-->
+		<dependency>
+			<groupId>org.springframework.boot</groupId>
+			<artifactId>spring-boot-starter-security</artifactId>
+		</dependency>
+
+		<!--
+			Implementacion de JOSE (firmar y verificar JWT) que usa Spring Security.
+
+			Se declara el modulo de JOSE y NO el starter de resource-server a
+			proposito: el starter configura el JwtDecoder a partir de properties
+			(spring.security.oauth2.resourceserver.jwt.*) y espera que el
+			autoconfigurador se encargue de todo. Aqui el token se emite y se valida
+			con una clave secreta propia de la aplicacion, asi que el JwtDecoder se
+			declara a mano. Traer el starter solo para usar sus clases seria meter
+			autoconfiguracion que habria que apagar.
+		-->
+		<dependency>
+			<groupId>org.springframework.security</groupId>
+			<artifactId>spring-security-oauth2-jose</artifactId>
+		</dependency>
+
+		<!--
+			Flyway es el dueno del esquema. La version (12.x) la gestiona el BOM de
+			Spring Boot y no se declara. El modulo de PostgreSQL va aparte porque
+			desde Flyway 10 el soporte de cada base de datos vive en su propio
+			artefacto.
+
+			spring-boot-flyway es el modulo que trae FlywayAutoConfiguration. Sin el,
+			flyway-core esta en el classpath pero Spring no ejecuta ninguna migracion,
+			porque no hay ningun bean que lo llame. Es la misma separacion que
+			sufrieron todos los modulos de autoconfiguracion en Spring Boot 4, y el
+			sintoma es desconcertante: las propiedades spring.flyway.* se aceptan en
+			silencio y no hacen nada. Lo que destapa el problema es
+			ddl-auto=validate, que falla con "missing table" en vez de con un
+			mensaje que diga que falta la migracion.
+		-->
+		<dependency>
+			<groupId>org.springframework.boot</groupId>
+			<artifactId>spring-boot-flyway</artifactId>
+		</dependency>
+		<dependency>
+			<groupId>org.flywaydb</groupId>
+			<artifactId>flyway-core</artifactId>
+		</dependency>
+		<dependency>
+			<groupId>org.flywaydb</groupId>
+			<artifactId>flyway-database-postgresql</artifactId>
+		</dependency>
+
+		<dependency>
+			<groupId>org.mapstruct</groupId>
+			<artifactId>mapstruct</artifactId>
+			<version>${org.mapstruct.version}</version>
+		</dependency>
+		<!--
+			El procesador se registra como dependencia normal, y su ruta tambien se
+			declara en maven-compiler-plugin mas abajo. Ver la nota de ese bloque.
+		-->
+		<dependency>
+			<groupId>org.mapstruct</groupId>
+			<artifactId>mapstruct-processor</artifactId>
+			<version>${org.mapstruct.version}</version>
+		</dependency>
+
+		<dependency>
+			<groupId>org.projectlombok</groupId>
+			<artifactId>lombok</artifactId>
+			<optional>true</optional>
+		</dependency>
+		<dependency>
+			<groupId>org.springframework.boot</groupId>
+			<artifactId>spring-boot-devtools</artifactId>
+			<scope>runtime</scope>
+			<optional>true</optional>
+		</dependency>
+		<dependency>
+			<groupId>org.postgresql</groupId>
+			<artifactId>postgresql</artifactId>
+			<scope>runtime</scope>
+		</dependency>
+		<dependency>
+			<groupId>org.junit.jupiter</groupId>
+			<artifactId>junit-jupiter</artifactId>
+			<scope>test</scope>
+		</dependency>
+		<dependency>
+			<groupId>org.mockito</groupId>
+			<artifactId>mockito-junit-jupiter</artifactId>
+			<scope>test</scope>
+		</dependency>
+		<dependency>
+			<groupId>org.springframework.boot</groupId>
+			<artifactId>spring-boot-starter-data-jpa-test</artifactId>
+			<scope>test</scope>
+		</dependency>
+		<dependency>
+			<groupId>org.springframework.boot</groupId>
+			<artifactId>spring-boot-starter-webmvc-test</artifactId>
+			<scope>test</scope>
+		</dependency>
+
+		<!--
+			Testcontainers. El contenedor de PostgreSQL es lo que permite probar el SQL
+			real contra PostgreSQL en vez de contra H2, que miente en cosas como
+			bloqueos pesimistas, secuencias y tipos numericos.
+			La version (2.x) la gestiona el BOM de Spring Boot via testcontainers-bom.
+		-->
+		<dependency>
+			<groupId>org.springframework.boot</groupId>
+			<artifactId>spring-boot-testcontainers</artifactId>
+			<scope>test</scope>
+		</dependency>
+		<!--
+			H2 SOLO como datasource de reserva para los tests que no necesitan la base
+			de datos real (por ejemplo el test de carga del contexto), de modo que
+			arranquen sin Docker.
+
+			No se usa para probar persistencia: H2 miente en bloqueos pesimistas,
+			secuencias y precision de numeric. Los tests de integracion usan
+			Testcontainers contra PostgreSQL real (ver AbstractPostgresIT).
+		-->
+		<dependency>
+			<groupId>com.h2database</groupId>
+			<artifactId>h2</artifactId>
+			<scope>test</scope>
+		</dependency>
+		<dependency>
+			<groupId>org.testcontainers</groupId>
+			<artifactId>testcontainers-postgresql</artifactId>
+			<scope>test</scope>
+		</dependency>
+		<dependency>
+			<groupId>org.testcontainers</groupId>
+			<artifactId>testcontainers-junit-jupiter</artifactId>
+			<scope>test</scope>
+		</dependency>
+
+		<!--
+			ArchUnit comprueba en los tests que se respeta la regla de dependencia
+			hexagonal. Sin el, la arquitectura es una intencion: Java no impide que un
+			@Entity acabe importando un caso de uso. La version se fija aqui porque
+			el BOM de Spring Boot no gestiona este artefacto.
+		-->
+		<dependency>
+			<groupId>com.tngtech.archunit</groupId>
+			<artifactId>archunit-junit5</artifactId>
+			<version>${com.tngtech.archunit.version}</version>
+			<scope>test</scope>
+		</dependency>
+
+		<!--
+			Utilidades de test de Spring Security: @WithMockUser, jwt(), csrf(), etc.
+			Sin esto, probar la capa de autorizacion obliga a construir el token a
+			mano, que es justo lo que hay que evitar: si el test construye el token
+			con la misma logica que la-produccion, un fallo en esa logica aparece en
+			los dos sitios a la vez y el test pasa.
+		-->
+		<dependency>
+			<groupId>org.springframework.security</groupId>
+			<artifactId>spring-security-test</artifactId>
+			<scope>test</scope>
+		</dependency>
+	</dependencies>
+
+	<build>
+		<plugins>
+			<plugin>
+				<groupId>org.springframework.boot</groupId>
+				<artifactId>spring-boot-maven-plugin</artifactId>
+			</plugin>
+			<!--
+				maven-compiler-plugin lleva un ajuste que no es obvio y que no hay
+				que deshacer: annotationProcessorPaths se declara aqui y NO en
+				spring-boot-maven-plugin. Alli solo aplica al goal 'repackage', asi
+				que durante la compilacion nunca se ejecutaba y MapStruct no
+				generaba ninguna implementacion.
+
+				=========================
+				COMPILAR SIEMPRE CON clean. ./mvnw clean test
+
+				No es supersticion. El motivo, medido, esta en el readme.
+
+				maven-compiler-plugin decide que hay que recompilar comparando la
+				fecha de cada fuente con la de su clase. El servidor de lenguaje de
+				Java de VS Code (Eclipse JDT) compila este mismo proyecto dentro de
+				target/ al guardar un archivo, usando ECJ, y ECJ genera bytecode
+				INCLUSO cuando el fuente tiene errores, dejando el error dentro de la
+				propia clase. Como esa clase es mas nueva que el fuente, para Maven
+				nada esta obsoleto y responde "Nothing to compile": ejecuta bytecode
+				que javac jamas habria producido.
+
+				El sintoma es un fallo que no parece de compilacion:
+
+				    java.lang.Error: Unresolved compilation problem:
+				    	The method fieldNames() is undefined for the type JsonNode
+
+				Que NO lo arregla nada de este bloque, comprobado uno a uno:
+
+				  - useIncrementalCompilation: da igual el valor. No significa
+				    "recompila siempre", sino "cuando algo este obsoleto, recompila
+				    todo en vez de solo la parte que toca". Con true y con false se
+				    comparan las mismas fechas, y aqui no hay nada obsoleto.
+				  - staleMillis: es un int, y la version 3.15 del plugin lo acepta
+				    pero lo ignora al decidir.
+
+				Medido con clean package -DskipTests, comprobando si UserMapperImpl
+				implementa la interfaz: 5 de 12 rotas en el workspace, con el IDE
+				vigilando; 0 de 12 en una copia fuera del workspace.
+
+				La unica defensa desde Maven es clean, porque borra target/ y obliga
+				a compilar de verdad. La otra es que el IDE no escriba ahi, con
+				"java.autobuild.enabled": false en el .vscode/settings.json de la RAIZ
+				del workspace: el del modulo no sirve, porque VS Code solo lee el de
+				la raiz.
+			-->
+			<plugin>
+				<groupId>org.apache.maven.plugins</groupId>
+				<artifactId>maven-compiler-plugin</artifactId>
+				<configuration>
+					<!--
+						No hay useIncrementalCompilation aqui, y es deliberado. Se puso a
+						false para arreglar el "No qualifying bean of type 'UserMapper'
+						available", y se ha medido que no lo arregla en ninguno de sus dos
+						valores. La causa real es el IDE (ver el comentario de arriba): el
+						servidor de lenguaje escribe en target/ con ECJ, y para Maven la
+						clase de ECJ es mas nueva que el fuente, asi que no hay nada
+						obsoleto y da igual lo que se ponga aqui.
+					-->
+					<annotationProcessorPaths>
+						<path>
+							<groupId>org.projectlombok</groupId>
+							<artifactId>lombok</artifactId>
+						</path>
+						<!--
+							Binding de Lombok para MapStruct. Requisito explicito desde
+							Lombok 1.18.16 y documentado por el proyecto MapStruct: fija el
+							orden en que se ejecutan los dos procesadores, para que Lombok
+							genere los accesores antes de que MapStruct los lea.
+
+							Se mantuvo puesto cuando se culpaba al mapa de esa carrera, pero
+							ahora se sabe que no tiene nada que ver. El "No qualifying bean
+							of type 'UserMapper' available" no lo causaba MapStruct: lo causa
+							el servidor de lenguaje del IDE, que compila dentro de target/ con
+							ECJ. El binding regula el orden de los procesadores de javac, y
+							javac no tenia ningun problema.
+
+							Se conserva porque es lo que dice la documentacion de MapStruct y
+							porque no hace daño. Se puede quitar en la proxima limpieza de
+							dependencias: ya no esta arreglando nada.
+
+							El binding usa su propia numeracion (0.2.0 es la ultima
+							publicada), independiente de la version de Lombok, asi que
+							no se puede escribir como ${lombok.version}.
+						-->
+						<path>
+							<groupId>org.projectlombok</groupId>
+							<artifactId>lombok-mapstruct-binding</artifactId>
+							<version>${lombok.mapstruct.binding.version}</version>
+						</path>
+						<path>
+							<groupId>org.mapstruct</groupId>
+							<artifactId>mapstruct-processor</artifactId>
+							<version>${org.mapstruct.version}</version>
+						</path>
+					</annotationProcessorPaths>
+				</configuration>
+			</plugin>
+			<!--
+				maven-failsafe-plugin ejecuta los tests de integracion (*IT) y su
+				verificacion con 'verify' en lugar de con 'test'. La frontera no es
+				arbitraria:
+
+				1. Los *IT levantan PostgreSQL en un contenedor de Testcontainers, asi
+				   que necesitan Docker. Si formaran parte de 'test', un desarrollador
+				   sin Docker veria fallos que no son fallos del codigo.
+
+				2. 'verify' va despues de 'package'. Falla si el JAR no se puede
+				   construir, de modo que un test de integracion que pasa sobre un
+				   artefacto que no se empaqueta no puede darse por bueno.
+
+				Failsafe usa por defecto los patrones **/IT*.java, **/*IT.java y
+				**/*ITCase.java, que son los que sigue el proyecto. La clase abstracta
+				AbstractPostgresIT tambien encaja con el patron, pero al ser abstracta
+				failsafe la ignora.
+			-->
+			<plugin>
+				<groupId>org.apache.maven.plugins</groupId>
+				<artifactId>maven-failsafe-plugin</artifactId>
+			</plugin>
+		</plugins>
+	</build>
+
+</project>

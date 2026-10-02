@@ -1,0 +1,4 @@
+-- Esquema base. Vacio a proposito: no agregamos tablas del dominio todavia.
+-- Este archivo existe unicamente para que Flyway valide la migracion en el
+-- arranque y para establecer la linea base. Las tablas de Account/Transfer
+-- se añadiran en V2, cuando se generen las entidades de dominio.
